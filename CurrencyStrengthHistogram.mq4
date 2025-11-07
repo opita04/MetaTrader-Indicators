@@ -100,28 +100,12 @@ int init()
 
     // Validate timeframes - cannot show lower timeframes than current chart
     ENUM_TIMEFRAMES currentTF = Period();
-    int validTimeframes = 0;
-    ENUM_TIMEFRAMES validTFs[4];
 
+    // Keep the user-selected NumTimeframes; normalize any lower TFs up to current chart TF
     for(int i = 0; i < 4; i++)
     {
-        if(Timeframes[i] >= currentTF)
-        {
-            validTFs[validTimeframes] = Timeframes[i];
-            validTimeframes++;
-        }
-    }
-
-    // Update NumTimeframes to reflect only valid timeframes
-    NumTimeframes = validTimeframes;
-
-    // Reassign valid timeframes back to Timeframes array
-    for(int i = 0; i < 4; i++)
-    {
-        if(i < validTimeframes)
-            Timeframes[i] = validTFs[i];
-        else
-            Timeframes[i] = currentTF; // Set to current TF to avoid issues
+        if(Timeframes[i] < currentTF)
+            Timeframes[i] = currentTF;
     }
 
     // Set up indicator buffers
