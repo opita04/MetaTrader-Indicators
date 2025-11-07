@@ -1,0 +1,26 @@
+# MetaTrader compiled files
+*.ex4
+*.ex5
+
+# MetaTrader cache
+*.chk
+
+# IDE files
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
