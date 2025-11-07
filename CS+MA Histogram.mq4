@@ -14,8 +14,8 @@ Compatibility: MetaTrader 4 (MT4)
 #property version   "1.00"
 #property strict
 #property indicator_separate_window
-#property indicator_buffers 6
-#property indicator_plots   6
+#property indicator_buffers 8
+#property indicator_plots   8
 #property indicator_minimum 0
 #property indicator_maximum 4
 
@@ -42,11 +42,20 @@ Compatibility: MetaTrader 4 (MT4)
 //--- plot TF3 DOWN
 #property indicator_label6  "TF3 DOWN"
 #property indicator_type6   DRAW_ARROW
+#property indicator_label7  "CS Line1"
+#property indicator_type7   DRAW_LINE
+#property indicator_label8  "CS Line2"
+#property indicator_type8   DRAW_LINE
 
 //--- Indicator Parameters
 extern string IndicatorName = "CurrencyStrengthWizard"; // Source Indicator Name (REQUIRED)
 extern int    Line1Buffer = 0;             // Line 1 Buffer Number
 extern int    Line2Buffer = 1;             // Line 2 Buffer Number
+extern string IndicatorSubfolder = "";   // Optional subfolder for the custom indicator
+extern bool   ShowCustomHistory = true;    // Show history lines from the custom CS indicator
+extern color  CustomLine1Color = clrYellow; // Color for Line1 history
+extern color  CustomLine2Color = clrAqua;  // Color for Line2 history
+extern int    CustomLineWidth = 1;         // Line width for history plots
 
 extern int    NumTimeframes = 3;            // Number of Timeframes to Display (1-3)
 extern ENUM_TIMEFRAMES Timeframe1 = PERIOD_H1;   // Timeframe 1
@@ -110,6 +119,9 @@ double TF2UpBuffer[];
 double TF2DownBuffer[];
 double TF3UpBuffer[];
 double TF3DownBuffer[];
+// History display buffers for the custom Currency Strength indicator
+double CSLine1History[];
+double CSLine2History[];
 
 //--- Global Variables
 ENUM_TIMEFRAMES Timeframes[3];
@@ -168,8 +180,8 @@ int init()
             Timeframes[i] = currentTF; // Set to current TF to avoid issues
     }
 
-    // Set up indicator buffers
-    IndicatorBuffers(6);
+    // Set up indicator buffers (including two history line plots)
+    IndicatorBuffers(8);
 
     // Main buffers
     int i=0;
@@ -179,6 +191,9 @@ int init()
     SetIndexBuffer(i++,TF2DownBuffer,INDICATOR_DATA);
     SetIndexBuffer(i++,TF3UpBuffer,INDICATOR_DATA);
     SetIndexBuffer(i++,TF3DownBuffer,INDICATOR_DATA);
+    // History lines from the custom Currency Strength indicator
+    SetIndexBuffer(i++,CSLine1History,INDICATOR_DATA);
+    SetIndexBuffer(i++,CSLine2History,INDICATOR_DATA);
 
     // Set index styles for arrows
     SetIndexStyle(0,DRAW_ARROW,EMPTY,2,TF1UpColor);
@@ -204,6 +219,13 @@ int init()
     SetIndexStyle(5,DRAW_ARROW,EMPTY,2,TF3DownColor);
     SetIndexArrow(5,110);
     SetIndexEmptyValue(5,EMPTY_VALUE);
+
+    // History line styles
+    SetIndexStyle(6,DRAW_LINE,EMPTY,CustomLineWidth,CustomLine1Color);
+    SetIndexEmptyValue(6,EMPTY_VALUE);
+
+    SetIndexStyle(7,DRAW_LINE,EMPTY,CustomLineWidth,CustomLine2Color);
+    SetIndexEmptyValue(7,EMPTY_VALUE);
 
     // Set indicator name
     string tfString = GetTimeframeString(Timeframes[0]);
@@ -274,12 +296,45 @@ int start()
         ArrayInitialize(TF2DownBuffer, EMPTY_VALUE);
         ArrayInitialize(TF3UpBuffer, EMPTY_VALUE);
         ArrayInitialize(TF3DownBuffer, EMPTY_VALUE);
+        ArrayInitialize(CSLine1History, EMPTY_VALUE);
+        ArrayInitialize(CSLine2History, EMPTY_VALUE);
     }
 
     int rv = Bars;
     // Use fixed level spacing so remaining timeframes compress without leaving large gaps
     double levelStep = 1.0;
     double currentLevel = 1.0;
+
+    // Populate custom indicator history lines for the current chart timeframe
+    // Always fetch up to BarsToLookBack (or available Bars) so history length matches input
+    if(ShowCustomHistory)
+    {
+        int historyBars = MathMin(Bars, BarsToLookBack);
+        for(int hi = historyBars - 1; hi >= 0; hi--)
+        {
+            double l1 = EMPTY_VALUE, l2 = EMPTY_VALUE;
+            // Try primary name, fall back to subfolder if needed
+            string name = IndicatorName;
+            l1 = iCustom(Symbol(), Period(), name, Line1Buffer, hi);
+            l2 = iCustom(Symbol(), Period(), name, Line2Buffer, hi);
+            if((l1 == EMPTY_VALUE || l2 == EMPTY_VALUE) && StringLen(IndicatorSubfolder) > 0)
+            {
+                name = IndicatorSubfolder + IndicatorName;
+                l1 = iCustom(Symbol(), Period(), name, Line1Buffer, hi);
+                l2 = iCustom(Symbol(), Period(), name, Line2Buffer, hi);
+            }
+
+            CSLine1History[hi] = (l1 != EMPTY_VALUE) ? l1 : EMPTY_VALUE;
+            CSLine2History[hi] = (l2 != EMPTY_VALUE) ? l2 : EMPTY_VALUE;
+        }
+
+        // Clear any remaining history slots above historyBars to avoid stale values
+        for(int hi = historyBars; hi < Bars; hi++)
+        {
+            CSLine1History[hi] = EMPTY_VALUE;
+            CSLine2History[hi] = EMPTY_VALUE;
+        }
+    }
 
     // Process each valid timeframe
     for(int tf_idx = 0; tf_idx < NumTimeframes; tf_idx++)
@@ -671,6 +726,23 @@ double GetStrengthValue(int bar, ENUM_TIMEFRAMES timeframe, int tf_index)
     }
 
     return EMPTY_VALUE; // fallback
+}
+
+//+------------------------------------------------------------------+
+//| Fetch custom indicator line values with optional subfolder fallback
+//+------------------------------------------------------------------+
+bool FetchCustomCSLines(int bar, ENUM_TIMEFRAMES timeframe, double &line1, double &line2)
+{
+    string name = IndicatorName;
+    line1 = iCustom(Symbol(), timeframe, name, Line1Buffer, bar);
+    line2 = iCustom(Symbol(), timeframe, name, Line2Buffer, bar);
+    if((line1 == EMPTY_VALUE || line2 == EMPTY_VALUE) && StringLen(IndicatorSubfolder) > 0)
+    {
+        name = IndicatorSubfolder + IndicatorName;
+        line1 = iCustom(Symbol(), timeframe, name, Line1Buffer, bar);
+        line2 = iCustom(Symbol(), timeframe, name, Line2Buffer, bar);
+    }
+    return !(line1 == EMPTY_VALUE || line2 == EMPTY_VALUE);
 }
 
 //+------------------------------------------------------------------+
