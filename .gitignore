@@ -10,6 +10,8 @@
 .idea/
 *.suo
 *.user
+.cursor/
+.cursorrules
 
 # OS files
 .DS_Store
