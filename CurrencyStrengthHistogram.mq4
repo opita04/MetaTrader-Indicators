@@ -3,7 +3,7 @@
 //|                        Currency Strength Multi-Timeframe Histogram |
 //+------------------------------------------------------------------+
 #property copyright "Currency Strength Histogram"
-#property version   "1.00"
+#property version   "1.20"
 #property strict
 #property indicator_separate_window
 #property indicator_buffers 8
@@ -49,18 +49,36 @@ extern int    Line1Buffer = 0;             // Line 1 Buffer Number
 extern int    Line2Buffer = 1;             // Line 2 Buffer Number
 
 extern int    NumTimeframes = 4;            // Number of Timeframes to Display (1-4)
-extern ENUM_TIMEFRAMES Timeframe1 = PERIOD_H4;   // Timeframe 1
-extern ENUM_TIMEFRAMES Timeframe2 = PERIOD_H1;   // Timeframe 2
-extern ENUM_TIMEFRAMES Timeframe3 = PERIOD_M30;  // Timeframe 3
-extern ENUM_TIMEFRAMES Timeframe4 = PERIOD_M5;   // Timeframe 4
+extern ENUM_TIMEFRAMES Timeframe4 = PERIOD_D1;   // Timeframe 4
+extern ENUM_TIMEFRAMES Timeframe3 = PERIOD_H1;   // Timeframe 3
+extern ENUM_TIMEFRAMES Timeframe2 = PERIOD_M5;  // Timeframe 2
+extern ENUM_TIMEFRAMES Timeframe1 = PERIOD_M1;   // Timeframe 1
 
-extern int    BarsToLookBack = 100;         // Bars to Look Back for Data
+extern int    BarsToLookBack = 500;         // Bars to Look Back for Data
 
-//--- Tag Settings
+//--- ====================== Tag Settings ======================
 extern bool   ShowTags = true;              // Show timeframe labels on the right
 extern string TagFont = "Arial Black";      // Font for timeframe labels
 extern int    TagFontSize = 8;              // Font size for timeframe labels
 extern color  TagColor = clrBisque;         // Color for timeframe labels
+
+//--- =================== Histogram Color Settings ==================
+// Editable colors for each timeframe/up-down plot
+extern color TF1UpColor   = clrSkyBlue;     // TF1 up color
+extern color TF1DownColor = clrTomato;      // TF1 down color
+extern color TF2UpColor   = clrSkyBlue;     // TF2 up color
+extern color TF2DownColor = clrTomato;      // TF2 down color
+extern color TF3UpColor   = clrSkyBlue;     // TF3 up color
+extern color TF3DownColor = clrTomato;      // TF3 down color
+extern color TF4UpColor   = clrSkyBlue;     // TF4 up color
+extern color TF4DownColor = clrTomato;      // TF4 down color
+
+//--- ================== Vertical Line Settings ==================
+extern bool   ShowVerticalLines = true;     // Show vertical lines at TF1 histogram start
+extern int    VerticalLineStyle = STYLE_SOLID; // Style for vertical lines
+extern int    VerticalLineWidth = 3;        // Width for vertical lines
+
+//--- (external VLine matching removed — vertical lines now derived from TF1 buffers)
 
 //--- Indicator Buffers
 double TF1UpBuffer[];
@@ -99,13 +117,33 @@ int init()
     Timeframes[3] = Timeframe4;
 
     // Validate timeframes - cannot show lower timeframes than current chart
-    ENUM_TIMEFRAMES currentTF = Period();
+    int currentPeriod = Period();
+    ENUM_TIMEFRAMES currentTF = (ENUM_TIMEFRAMES)currentPeriod;
+    int validTimeframes = 0;
+    ENUM_TIMEFRAMES validTFs[4];
+    // Initialize array to avoid uninitialized variable warning
+    for(int init_i = 0; init_i < 4; init_i++)
+        validTFs[init_i] = currentTF;
 
-    // Keep the user-selected NumTimeframes; normalize any lower TFs up to current chart TF
+    for(int i = 0; i < NumTimeframes; i++)  // Only check the requested number of timeframes
+    {
+        if(Timeframes[i] >= currentTF)
+        {
+            validTFs[validTimeframes] = Timeframes[i];
+            validTimeframes++;
+        }
+    }
+
+    // Update NumTimeframes to reflect only valid timeframes among the requested ones
+    NumTimeframes = validTimeframes;
+
+    // Reassign valid timeframes back to Timeframes array
     for(int i = 0; i < 4; i++)
     {
-        if(Timeframes[i] < currentTF)
-            Timeframes[i] = currentTF;
+        if(i < validTimeframes)
+            Timeframes[i] = validTFs[i];
+        else
+            Timeframes[i] = currentTF; // Set to current TF to avoid issues
     }
 
     // Set up indicator buffers
@@ -123,35 +161,35 @@ int init()
     SetIndexBuffer(i++,TF4DownBuffer,INDICATOR_DATA);
 
     // Set index styles for arrows
-    SetIndexStyle(0,DRAW_ARROW,EMPTY,2,clrSkyBlue);
+    SetIndexStyle(0,DRAW_ARROW,EMPTY,2,TF1UpColor);
     SetIndexArrow(0,110);
     SetIndexEmptyValue(0,EMPTY_VALUE);
 
-    SetIndexStyle(1,DRAW_ARROW,EMPTY,2,clrTomato);
+    SetIndexStyle(1,DRAW_ARROW,EMPTY,2,TF1DownColor);
     SetIndexArrow(1,110);
     SetIndexEmptyValue(1,EMPTY_VALUE);
 
-    SetIndexStyle(2,DRAW_ARROW,EMPTY,2,clrSkyBlue);
+    SetIndexStyle(2,DRAW_ARROW,EMPTY,2,TF2UpColor);
     SetIndexArrow(2,110);
     SetIndexEmptyValue(2,EMPTY_VALUE);
 
-    SetIndexStyle(3,DRAW_ARROW,EMPTY,2,clrTomato);
+    SetIndexStyle(3,DRAW_ARROW,EMPTY,2,TF2DownColor);
     SetIndexArrow(3,110);
     SetIndexEmptyValue(3,EMPTY_VALUE);
 
-    SetIndexStyle(4,DRAW_ARROW,EMPTY,2,clrSkyBlue);
+    SetIndexStyle(4,DRAW_ARROW,EMPTY,2,TF3UpColor);
     SetIndexArrow(4,110);
     SetIndexEmptyValue(4,EMPTY_VALUE);
 
-    SetIndexStyle(5,DRAW_ARROW,EMPTY,2,clrTomato);
+    SetIndexStyle(5,DRAW_ARROW,EMPTY,2,TF3DownColor);
     SetIndexArrow(5,110);
     SetIndexEmptyValue(5,EMPTY_VALUE);
 
-    SetIndexStyle(6,DRAW_ARROW,EMPTY,2,clrSkyBlue);
+    SetIndexStyle(6,DRAW_ARROW,EMPTY,2,TF4UpColor);
     SetIndexArrow(6,110);
     SetIndexEmptyValue(6,EMPTY_VALUE);
 
-    SetIndexStyle(7,DRAW_ARROW,EMPTY,2,clrTomato);
+    SetIndexStyle(7,DRAW_ARROW,EMPTY,2,TF4DownColor);
     SetIndexArrow(7,110);
     SetIndexEmptyValue(7,EMPTY_VALUE);
 
@@ -175,6 +213,14 @@ int deinit()
     for(int i=1; i<=4; i++)
     {
         ObjectDelete("TF_"+IntegerToString(i));
+    }
+    // Clean up vertical line objects (delete any object whose name starts with "VLine_")
+    int totalObjects = ObjectsTotal();
+    for(int objIdx = totalObjects-1; objIdx >= 0; objIdx--)
+    {
+        string objName = ObjectName(objIdx);
+        if(StringFind(objName, "VLine_") == 0)
+            ObjectDelete(objName);
     }
     return(0);
 }
@@ -207,7 +253,9 @@ int start()
     }
 
     int rv = Bars;
-    int k = 1;
+    // Use fixed level spacing so remaining timeframes compress without leaving large gaps
+    double levelStep = 1.0;
+    double currentLevel = 1.0;
 
     // Process each valid timeframe
     for(int tf_idx = 0; tf_idx < NumTimeframes; tf_idx++)
@@ -225,19 +273,19 @@ int start()
                     switch(tf_idx)
                     {
                         case 0:
-                            TF1UpBuffer[i] = k;
+                            TF1UpBuffer[i] = currentLevel;
                             TF1DownBuffer[i] = EMPTY_VALUE;
                             break;
                         case 1:
-                            TF2UpBuffer[i] = k;
+                            TF2UpBuffer[i] = currentLevel;
                             TF2DownBuffer[i] = EMPTY_VALUE;
                             break;
                         case 2:
-                            TF3UpBuffer[i] = k;
+                            TF3UpBuffer[i] = currentLevel;
                             TF3DownBuffer[i] = EMPTY_VALUE;
                             break;
                         case 3:
-                            TF4UpBuffer[i] = k;
+                            TF4UpBuffer[i] = currentLevel;
                             TF4DownBuffer[i] = EMPTY_VALUE;
                             break;
                     }
@@ -249,19 +297,19 @@ int start()
                     {
                         case 0:
                             TF1UpBuffer[i] = EMPTY_VALUE;
-                            TF1DownBuffer[i] = k;
+                            TF1DownBuffer[i] = currentLevel;
                             break;
                         case 1:
                             TF2UpBuffer[i] = EMPTY_VALUE;
-                            TF2DownBuffer[i] = k;
+                            TF2DownBuffer[i] = currentLevel;
                             break;
                         case 2:
                             TF3UpBuffer[i] = EMPTY_VALUE;
-                            TF3DownBuffer[i] = k;
+                            TF3DownBuffer[i] = currentLevel;
                             break;
                         case 3:
                             TF4UpBuffer[i] = EMPTY_VALUE;
-                            TF4DownBuffer[i] = k;
+                            TF4DownBuffer[i] = currentLevel;
                             break;
                     }
                 }
@@ -292,43 +340,85 @@ int start()
             }
         }
 
-        k++; // Increment level for next timeframe
+        currentLevel += levelStep; // Increment level for next timeframe
     }
 
-    // Clear unused timeframe buffers completely
-    if(NumTimeframes < 4)
+    // Clear unused timeframe buffers completely - clear ALL bars, not just limit
+    int totalBars = MathMin(Bars, BarsToLookBack);
+    for(int i = totalBars - 1; i >= 0; i--)
     {
-        for(int i = limit; i >= 0; i--)
+        // Clear TF4 buffers if not used
+        if(NumTimeframes < 4)
         {
-            // Clear TF4 buffers if not used
-            if(NumTimeframes < 4)
+            TF4UpBuffer[i] = EMPTY_VALUE;
+            TF4DownBuffer[i] = EMPTY_VALUE;
+        }
+        // Clear TF3 buffers if not used
+        if(NumTimeframes < 3)
+        {
+            TF3UpBuffer[i] = EMPTY_VALUE;
+            TF3DownBuffer[i] = EMPTY_VALUE;
+        }
+        // Clear TF2 buffers if not used
+        if(NumTimeframes < 2)
+        {
+            TF2UpBuffer[i] = EMPTY_VALUE;
+            TF2DownBuffer[i] = EMPTY_VALUE;
+        }
+        // TF1 is always used if NumTimeframes >= 1, so no need to clear it
+    }
+
+    // Create vertical lines at TF1 up/down zone STARTS (match Arrows' zone-start logic)
+    if(ShowVerticalLines && NumTimeframes >= 1)
+    {
+        // Remove any existing VLine objects created by this indicator to avoid duplicates
+        for(int objIdx2 = ObjectsTotal() - 1; objIdx2 >= 0; objIdx2--)
+        {
+            string objName2 = ObjectName(objIdx2);
+            if(StringFind(objName2, "VLine_") == 0 || objName2 == "VLine_Start" || objName2 == "VLine_End")
+                ObjectDelete(objName2);
+        }
+
+        int prevState = 0; // 0 = none, 1 = up, -1 = down
+        // Scan from oldest to newest (totalBars-1 down to 0)
+        for(int b = totalBars - 1; b >= 0; b--)
+        {
+            int state = 0;
+            if(TF1UpBuffer[b] != EMPTY_VALUE) state = 1;
+            else if(TF1DownBuffer[b] != EMPTY_VALUE) state = -1;
+
+            // If we enter a zone (state becomes up or down) and previous state is different, mark zone start
+            if(state != 0 && state != prevState)
             {
-                TF4UpBuffer[i] = EMPTY_VALUE;
-                TF4DownBuffer[i] = EMPTY_VALUE;
+                string vname = "VLine_" + IntegerToString((int)Time[b]);
+                color vcol = (state == 1) ? TF1UpColor : TF1DownColor;
+                DrawVerticalLine(vname, Time[b], vcol, VerticalLineStyle, VerticalLineWidth);
             }
-            // Clear TF3 buffers if not used
-            if(NumTimeframes < 3)
-            {
-                TF3UpBuffer[i] = EMPTY_VALUE;
-                TF3DownBuffer[i] = EMPTY_VALUE;
-            }
-            // Clear TF2 buffers if not used
-            if(NumTimeframes < 2)
-            {
-                TF2UpBuffer[i] = EMPTY_VALUE;
-                TF2DownBuffer[i] = EMPTY_VALUE;
-            }
-            // TF1 is always used if NumTimeframes >= 1, so no need to clear it
+
+            if(state != 0) prevState = state;
+        }
+    }
+    else
+    {
+        // Clear all vertical lines if disabled
+        for(int objIdx = ObjectsTotal() - 1; objIdx >= 0; objIdx--)
+        {
+            string objName = ObjectName(objIdx);
+            if(StringFind(objName, "VLine_") == 0 || objName == "VLine_Start")
+                ObjectDelete(objName);
         }
     }
 
     // Draw timeframe labels on the right side
     if(ShowTags)
     {
-        for(int i=1; i<=NumTimeframes; i++)
+        double labelLevel = 1.0;
+        for(int i=0; i<NumTimeframes; i++)
         {
-            string tfs = GetTimeframeString(Timeframes[i-1]);
-            DrawText("TF_"+IntegerToString(i), tfs, Time[0]+Period()*60, i, TagColor, TagFont, TagFontSize, false, ANCHOR_LEFT);
+            string tfs = GetTimeframeString(Timeframes[i]);
+            // Position labels at the same levels as histogram bars. Place farther to the right of current bar to avoid overlapping histogram
+            DrawText("TF_"+IntegerToString(i+1), tfs, Time[0] + Period()*150, labelLevel, TagColor, TagFont, TagFontSize, false, ANCHOR_LEFT);
+            labelLevel += levelStep;
         }
 
         // Clear unused labels
@@ -355,11 +445,30 @@ void DrawText(string name, string text, datetime time, double price, color col, 
     {
         ObjectSetText(name, text);
         ObjectSet(name, OBJPROP_COLOR, col);
-        ObjectSet(name, OBJPROP_FONT, font);
         ObjectSet(name, OBJPROP_FONTSIZE, fontSize);
+        // Note: Font property cannot be changed after object creation in MQL4
         ObjectSet(name, OBJPROP_BACK, back);
         ObjectSet(name, OBJPROP_ANCHOR, anchor);
         ObjectMove(name, 0, time, price);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw vertical line on indicator subwindow                        |
+//+------------------------------------------------------------------+
+void DrawVerticalLine(string name, datetime time, color col, int style, int width)
+{
+    // Create a vertical line in the main chart window so it spans the chart (not just the indicator subwindow)
+    if(ObjectFind(name) < 0)
+    {
+        ObjectCreate(name, OBJ_VLINE, 0, time, 0);
+    }
+    if(ObjectFind(name) >= 0)
+    {
+        ObjectSet(name, OBJPROP_COLOR, col);
+        ObjectSet(name, OBJPROP_STYLE, style);
+        ObjectSet(name, OBJPROP_WIDTH, width);
+        ObjectSet(name, OBJPROP_BACK, true);
     }
 }
 

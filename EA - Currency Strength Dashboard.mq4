@@ -92,6 +92,7 @@ int TotalPairs = 0;       // Total number of pairs to display
 ENUM_TIMEFRAMES Timeframes[4]; // Array of active timeframes
 bool AlertEnabled[4];     // Alert enabled for each timeframe
 int PreviousSignals[]; // Previous signals for each pair and timeframe [pair*4 + tf]
+datetime PreviousSignalTime[]; // Timestamp of last signal change for each pair/timeframe [pair*4 + tf]
 string BotName = "Currency Strength Dashboard"; // Bot name for alerts
 
 //+------------------------------------------------------------------+
@@ -139,6 +140,12 @@ int OnInit()
     for(int i = 0; i < TotalPairs * 4; i++)
     {
         PreviousSignals[i] = 0; // Initialize to neutral
+    }
+    // Initialize previous signal times array
+    ArrayResize(PreviousSignalTime, TotalPairs * 4);
+    for(int ti = 0; ti < TotalPairs * 4; ti++)
+    {
+        PreviousSignalTime[ti] = 0; // No timestamp yet
     }
 
     // Set indicator name
@@ -592,12 +599,38 @@ void CreateDashboard()
             ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
             ObjectSet(objName, OBJPROP_BACK, false); // Bring to front
             ObjectSet(objName, OBJPROP_XDISTANCE, xPos);
-            ObjectSet(objName, OBJPROP_YDISTANCE, yPos + 5);
+            ObjectSet(objName, OBJPROP_YDISTANCE, yPos + (rowHeight/4));
             ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
             ObjectSetText(objName, CharToString(232), DashboardFontSize + 2, "Wingdings", NeutralColor);
             ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
             ObjectSet(objName, OBJPROP_SELECTABLE, true); // Make clickable
             ObjectSet(objName, OBJPROP_SELECTED, false);
+            // Create an age square centered below the arrow inside the same TF cell
+            int ageWidth = MathMin(30, colWidth - 10);
+            int ageHeight = 12;
+            int ageLeft = xPos - (ageWidth / 2);
+            int ageTop = yPos + rowHeight - ageHeight - 4;
+
+            string objNameAgeBg = DashboardPrefix + "Pair_" + i + "_TF" + (string)t + "_AgeBg";
+            ObjectCreate(objNameAgeBg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+            ObjectSet(objNameAgeBg, OBJPROP_BACK, false);
+            ObjectSet(objNameAgeBg, OBJPROP_XDISTANCE, ageLeft);
+            ObjectSet(objNameAgeBg, OBJPROP_YDISTANCE, ageTop);
+            ObjectSet(objNameAgeBg, OBJPROP_XSIZE, ageWidth);
+            ObjectSet(objNameAgeBg, OBJPROP_YSIZE, ageHeight);
+            ObjectSet(objNameAgeBg, OBJPROP_BGCOLOR, DashboardBgColor);
+            ObjectSet(objNameAgeBg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+            ObjectSet(objNameAgeBg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+
+            string objNameAge = DashboardPrefix + "Pair_" + i + "_TF" + (string)t + "_Age";
+            ObjectCreate(objNameAge, OBJ_LABEL, 0, 0, 0);
+            ObjectSet(objNameAge, OBJPROP_BACK, false);
+            ObjectSet(objNameAge, OBJPROP_XDISTANCE, xPos);
+            ObjectSet(objNameAge, OBJPROP_YDISTANCE, ageTop + (ageHeight/2));
+            ObjectSet(objNameAge, OBJPROP_ANCHOR, ANCHOR_CENTER);
+            // Smaller font for the age text; initial empty
+            ObjectSetText(objNameAge, "", MathMax(6, DashboardFontSize - 1), DashboardFont, TableTextColor);
+            ObjectSet(objNameAge, OBJPROP_CORNER, CORNER_LEFT_UPPER);
         }
 
         // Horizontal grid line after this row (except for the last row)
@@ -652,6 +685,12 @@ void UpdateDashboard()
             }
 
             // Update previous signal
+            // If the signal changed, record the timestamp of the change
+            int oldSignal = PreviousSignals[signalIndex];
+            if(oldSignal != currentSignal)
+            {
+                PreviousSignalTime[signalIndex] = TimeCurrent();
+            }
             PreviousSignals[signalIndex] = currentSignal;
 
             // Determine arrow and color
@@ -674,6 +713,19 @@ void UpdateDashboard()
             // Update display
             objName = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf;
             ObjectSetText(objName, signalText, DashboardFontSize + 2, "Wingdings", signalColor);
+            // Update the age label for this timeframe
+            string objNameAge = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf + "_Age";
+            string ageText = "";
+            if(currentSignal != 0 && PreviousSignalTime[signalIndex] > 0)
+            {
+                ageText = FormatSignalAge(PreviousSignalTime[signalIndex]);
+            }
+            else if(currentSignal != 0 && PreviousSignalTime[signalIndex] == 0)
+            {
+                // If we have a non-zero signal but no recorded time, use a placeholder
+                ageText = "<1m";
+            }
+            ObjectSetText(objNameAge, ageText, MathMax(6, DashboardFontSize - 1), DashboardFont, TableTextColor);
         }
     }
 }
@@ -747,6 +799,21 @@ string GetTimeframeString(ENUM_TIMEFRAMES timeframe)
         case PERIOD_MN1: return "MN1";
         default: return "UNKNOWN";
     }
+}
+
+//+------------------------------------------------------------------+
+//| Format signal age (e.g. "5m", "2h30m")                           |
+//+------------------------------------------------------------------+
+string FormatSignalAge(datetime when)
+{
+    int secs = (int)(TimeCurrent() - when);
+    if(secs < 60) return "<1m";
+    int mins = secs / 60;
+    if(mins < 60) return IntegerToString(mins) + "m";
+    int hours = mins / 60;
+    int remMins = mins % 60;
+    if(remMins == 0) return IntegerToString(hours) + "h";
+    return IntegerToString(hours) + "h" + IntegerToString(remMins) + "m";
 }
 
 //+------------------------------------------------------------------+

@@ -37,8 +37,8 @@ Compatibility: MetaTrader 4, all timeframes, requires sufficient historical data
 #property version   "1.00"
 #property strict
 #property indicator_chart_window
-#property indicator_buffers 10
-#property indicator_plots   10
+#property indicator_buffers 6
+#property indicator_plots   6
 
 // Plot definitions for signals
 #property indicator_label1  "3LSH Buy"
@@ -72,27 +72,6 @@ Compatibility: MetaTrader 4, all timeframes, requires sufficient historical data
 #property indicator_type6   DRAW_ARROW
 #property indicator_color6  clrAqua
 #property indicator_width6  1
-
-// CS2 plots (arrows and X markers)
-#property indicator_label7  "3LSH Buy TF2"
-#property indicator_type7   DRAW_ARROW
-#property indicator_color7  clrLimeGreen
-#property indicator_width7  1
-
-#property indicator_label8  "3LSH Sell TF2"
-#property indicator_type8   DRAW_ARROW
-#property indicator_color8  clrCrimson
-#property indicator_width8  1
-
-#property indicator_label9  "Blocked Buy TF2"
-#property indicator_type9   DRAW_ARROW
-#property indicator_color9  clrMagenta
-#property indicator_width9  1
-
-#property indicator_label10 "Blocked Sell TF2"
-#property indicator_type10  DRAW_ARROW
-#property indicator_color10 clrDodgerBlue
-#property indicator_width10 1
 
 enum settings
   {
@@ -159,14 +138,6 @@ input bool       cs_require_cross       = false;                 // Require fres
 input bool       cs_filter_debug_logs   = false;                 // Debug logging
 input bool       exit_alerts            = false;                 // Send alert when blocked marker (X) is placed (exit alert)
 
-// Second Currency Strength filter (timeframe + colors)
-input bool            cs2_filter_enabled       = false;           // Enable second CS filter
-input ENUM_TIMEFRAMES cs2_timeframe            = PERIOD_M5;       // Second filter timeframe
-input color           cs2_buy_color            = clrLimeGreen;    // CS2 Buy arrow color
-input color           cs2_sell_color           = clrCrimson;      // CS2 Sell arrow color
-input color           cs2_blocked_buy_color    = clrMagenta;      // CS2 Blocked Buy X color
-input color           cs2_blocked_sell_color   = clrDodgerBlue;   // CS2 Blocked Sell X color
-
 extern settings husky            = 0;                               // ===== HuskyBands Settings =====
 extern bool useHuskyBands      = true;                            // Use HuskyBands?
 extern bool Show_HuskyBands    = false;                            // Show HuskyBands on chart
@@ -189,12 +160,7 @@ input bool     allowEmail  = true;                               // Email Notifi
 
 double buyBuff[], sellBuff[], huskyBandLowerBuff[], huskyBandUpperBuff[];
 double blockedBuyBuff[], blockedSellBuff[];
-// CS2 buffers
-double buyBuff2[], sellBuff2[];
-double blockedBuyBuff2[], blockedSellBuff2[];
-// Alert throttling per filter
 datetime prevBuy, prevSell;
-datetime prevBuy2, prevSell2;
 string indicatorName = "Opita 3LSH Signals";
 string dir = "";
 double sumWeights;
@@ -240,28 +206,6 @@ int OnInit()
   SetIndexArrow(5, 88);
   SetIndexBuffer(5, blockedSellBuff);
   SetIndexEmptyValue(5, EMPTY_VALUE);
-
-  // CS2: buy/sell arrows
-  SetIndexStyle(6, DRAW_ARROW, EMPTY, 2, cs2_buy_color);
-  SetIndexArrow(6, 233);
-  SetIndexBuffer(6, buyBuff2);
-  SetIndexEmptyValue(6, EMPTY_VALUE);
-
-  SetIndexStyle(7, DRAW_ARROW, EMPTY, 2, cs2_sell_color);
-  SetIndexArrow(7, 234);
-  SetIndexBuffer(7, sellBuff2);
-  SetIndexEmptyValue(7, EMPTY_VALUE);
-
-  // CS2: blocked markers (X)
-  SetIndexStyle(8, DRAW_ARROW, EMPTY, 2, cs2_blocked_buy_color);
-  SetIndexArrow(8, 88);
-  SetIndexBuffer(8, blockedBuyBuff2);
-  SetIndexEmptyValue(8, EMPTY_VALUE);
-
-  SetIndexStyle(9, DRAW_ARROW, EMPTY, 2, cs2_blocked_sell_color);
-  SetIndexArrow(9, 88);
-  SetIndexBuffer(9, blockedSellBuff2);
-  SetIndexEmptyValue(9, EMPTY_VALUE);
 
    IndicatorShortName(indicatorName);
    // Diagnostic: print currency-strength timeframe resolution and bar counts
@@ -324,11 +268,6 @@ int start()
       ArrayInitialize(huskyBandUpperBuff, EMPTY_VALUE);
      ArrayInitialize(blockedBuyBuff, EMPTY_VALUE);
      ArrayInitialize(blockedSellBuff, EMPTY_VALUE);
-     // CS2 buffers
-     ArrayInitialize(buyBuff2, EMPTY_VALUE);
-     ArrayInitialize(sellBuff2, EMPTY_VALUE);
-     ArrayInitialize(blockedBuyBuff2, EMPTY_VALUE);
-     ArrayInitialize(blockedSellBuff2, EMPTY_VALUE);
      }
 
    // Calculate HuskyBands first (from smLazyTMA HuskyBands)
@@ -356,138 +295,73 @@ int start()
       sellBuff[i] = EMPTY_VALUE;
       blockedBuyBuff[i] = EMPTY_VALUE;
       blockedSellBuff[i] = EMPTY_VALUE;
-      // CS2 buffers
-      buyBuff2[i] = EMPTY_VALUE;
-      sellBuff2[i] = EMPTY_VALUE;
-      blockedBuyBuff2[i] = EMPTY_VALUE;
-      blockedSellBuff2[i] = EMPTY_VALUE;
 
       // Get 3LS signal
       int signal_ls = signalLS(i);
 
-      bool isBuySetup  = (signal_ls == OP_BUY  && Low[i]  <= huskyBandLowerBuff[i] && useHuskyBands);
-      bool isSellSetup = (signal_ls == OP_SELL && High[i] >= huskyBandUpperBuff[i] && useHuskyBands);
-      bool anyFilterEnabled = (cs_filter_enabled || cs2_filter_enabled);
-
-      // BUY side
-      if(isBuySetup)
+      // Check for BUY signals when 3LS bullish signal and price touches Lower Band
+      if(signal_ls == OP_BUY && Low[i] <= huskyBandLowerBuff[i] && useHuskyBands)
         {
-         if(anyFilterEnabled)
+         if(cs_filter_enabled && !passesCurrencyStrengthFilter(i, OP_BUY))
+          {
+           if(cs_filter_debug_logs)
+              Print("3LSH CS filter veto BUY @bar ", i);
+           // place blocked marker where buy arrow would be
+           blockedBuyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
+           // Optional exit alert when the blocked marker (X) is created
+           if(exit_alerts)
+              doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked BUY at bar " + IntegerToString(i));
+           continue;
+          }
+         bool recentBuy = false;
+         for(int j=1; j<=ls_minBarsBetweenSignals && (i+j)<processBars; j++)
            {
-            // CS1
-            if(cs_filter_enabled)
-              {
-               bool pass1 = passesCurrencyStrengthFilterTf(i, OP_BUY, cs_timeframe);
-               if(pass1)
-                 {
-                  bool recentBuy1 = false;
-                  for(int j=1; j<=ls_minBarsBetweenSignals && (i+j)<processBars; j++)
-                    { if(buyBuff[i+j] != EMPTY_VALUE) { recentBuy1 = true; break; } }
-                  if(!recentBuy1)
-                    buyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
-                  if(i == 1 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
-                    { if(prevBuy != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy (CS1) - Bullish + Lower Band Touch"); prevBuy = Time[1]; } }
-                 }
-               else
-                 {
-                  if(cs_filter_debug_logs) Print("3LSH CS1 veto BUY @bar ", i);
-                  blockedBuyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
-                  if(exit_alerts) doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked BUY (CS1) at bar " + IntegerToString(i));
-                 }
-              }
-            // CS2
-            if(cs2_filter_enabled)
-              {
-               bool pass2 = passesCurrencyStrengthFilterTf(i, OP_BUY, cs2_timeframe);
-               if(pass2)
-                 {
-                  bool recentBuy2 = false;
-                  for(int j2=1; j2<=ls_minBarsBetweenSignals && (i+j2)<processBars; j2++)
-                    { if(buyBuff2[i+j2] != EMPTY_VALUE) { recentBuy2 = true; break; } }
-                  if(!recentBuy2)
-                    buyBuff2[i] = Low[i] - getPoint() * ls_arrow_gap;
-                  if(i == 1 && allowAlerts && buyBuff2[i] != EMPTY_VALUE)
-                    { if(prevBuy2 != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy (CS2) - Bullish + Lower Band Touch"); prevBuy2 = Time[1]; } }
-                 }
-               else
-                 {
-                  if(cs_filter_debug_logs) Print("3LSH CS2 veto BUY @bar ", i);
-                  blockedBuyBuff2[i] = Low[i] - getPoint() * ls_arrow_gap;
-                  if(exit_alerts) doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked BUY (CS2) at bar " + IntegerToString(i));
-                 }
-              }
+            if(buyBuff[i+j] != EMPTY_VALUE) { recentBuy = true; break; }
            }
-         else
+         if(!recentBuy)
+            buyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
+
+         // Alert on closed bar (i == 1) exactly when arrow is drawn
+         if(i == 1 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
            {
-            // No filters enabled: keep baseline behavior
-            bool recentBuy = false;
-            for(int jb=1; jb<=ls_minBarsBetweenSignals && (i+jb)<processBars; jb++)
-              { if(buyBuff[i+jb] != EMPTY_VALUE) { recentBuy = true; break; } }
-            if(!recentBuy)
-              buyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
-            if(i == 1 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
-              { if(prevBuy != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy - Bullish + Lower Band Touch"); prevBuy = Time[1]; } }
+            if(prevBuy != Time[1])
+              {
+               doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy Signal - Bullish + Lower Band Touch");
+               prevBuy = Time[1];
+              }
            }
         }
 
-      // SELL side
-      if(isSellSetup)
+      // Check for SELL signals when 3LS bearish signal and price touches Upper Band
+      if(signal_ls == OP_SELL && High[i] >= huskyBandUpperBuff[i] && useHuskyBands)
         {
-         if(anyFilterEnabled)
+         if(cs_filter_enabled && !passesCurrencyStrengthFilter(i, OP_SELL))
+          {
+           if(cs_filter_debug_logs)
+              Print("3LSH CS filter veto SELL @bar ", i);
+           // place blocked marker where sell arrow would be
+           blockedSellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
+           // Optional exit alert when the blocked marker (X) is created
+           if(exit_alerts)
+              doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked SELL at bar " + IntegerToString(i));
+           continue;
+          }
+         bool recentSell = false;
+         for(int j=1; j<=ls_minBarsBetweenSignals && (i+j)<processBars; j++)
            {
-            // CS1
-            if(cs_filter_enabled)
-              {
-               bool pass1s = passesCurrencyStrengthFilterTf(i, OP_SELL, cs_timeframe);
-               if(pass1s)
-                 {
-                  bool recentSell1 = false;
-                  for(int k=1; k<=ls_minBarsBetweenSignals && (i+k)<processBars; k++)
-                    { if(sellBuff[i+k] != EMPTY_VALUE) { recentSell1 = true; break; } }
-                  if(!recentSell1)
-                    sellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
-                  if(i == 1 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
-                    { if(prevSell != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell (CS1) - Bearish + Upper Band Touch"); prevSell = Time[1]; } }
-                 }
-               else
-                 {
-                  if(cs_filter_debug_logs) Print("3LSH CS1 veto SELL @bar ", i);
-                  blockedSellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
-                  if(exit_alerts) doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked SELL (CS1) at bar " + IntegerToString(i));
-                 }
-              }
-            // CS2
-            if(cs2_filter_enabled)
-              {
-               bool pass2s = passesCurrencyStrengthFilterTf(i, OP_SELL, cs2_timeframe);
-               if(pass2s)
-                 {
-                  bool recentSell2 = false;
-                  for(int k2=1; k2<=ls_minBarsBetweenSignals && (i+k2)<processBars; k2++)
-                    { if(sellBuff2[i+k2] != EMPTY_VALUE) { recentSell2 = true; break; } }
-                  if(!recentSell2)
-                    sellBuff2[i] = High[i] + getPoint() * ls_arrow_gap;
-                  if(i == 1 && allowAlerts && sellBuff2[i] != EMPTY_VALUE)
-                    { if(prevSell2 != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell (CS2) - Bearish + Upper Band Touch"); prevSell2 = Time[1]; } }
-                 }
-               else
-                 {
-                  if(cs_filter_debug_logs) Print("3LSH CS2 veto SELL @bar ", i);
-                  blockedSellBuff2[i] = High[i] + getPoint() * ls_arrow_gap;
-                  if(exit_alerts) doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked SELL (CS2) at bar " + IntegerToString(i));
-                 }
-              }
+            if(sellBuff[i+j] != EMPTY_VALUE) { recentSell = true; break; }
            }
-         else
+         if(!recentSell)
+            sellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
+
+         // Alert on closed bar (i == 1) exactly when arrow is drawn
+         if(i == 1 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
            {
-            // No filters enabled: keep baseline behavior
-            bool recentSell = false;
-            for(int ks=1; ks<=ls_minBarsBetweenSignals && (i+ks)<processBars; ks++)
-              { if(sellBuff[i+ks] != EMPTY_VALUE) { recentSell = true; break; } }
-            if(!recentSell)
-              sellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
-            if(i == 1 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
-              { if(prevSell != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell - Bearish + Upper Band Touch"); prevSell = Time[1]; } }
+            if(prevSell != Time[1])
+              {
+               doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell Signal - Bearish + Upper Band Touch");
+               prevSell = Time[1];
+              }
            }
         }
      }
@@ -497,36 +371,27 @@ int start()
 
 bool passesCurrencyStrengthFilter(int barIndex, int direction)
   {
-   // Delegate to timeframe-parameterized version using cs_timeframe
-   return passesCurrencyStrengthFilterTf(barIndex, direction, cs_timeframe);
-  }
 
-int resolveCurrencyStrengthShift(int barIndex)
-  {
-   if(cs_timeframe == Period())
-      return barIndex;
-   int shift = iBarShift(Symbol(), cs_timeframe, Time[barIndex], true);
-   if(shift < 0)
-      shift = iBarShift(Symbol(), cs_timeframe, Time[barIndex], false);
-   return shift;
-  }
-
-// New: timeframe-parameterized CS filter
-bool passesCurrencyStrengthFilterTf(int barIndex, int direction, int timeframe)
-  {
-   int strengthShift = resolveCurrencyStrengthShiftTf(barIndex, timeframe);
+   int strengthShift = resolveCurrencyStrengthShift(barIndex);
    if(strengthShift < 0)
      {
       if(cs_filter_debug_logs)
-         Print("3LSH CS shift unresolved, bar ", barIndex, " tf=", timeframe);
+         Print("3LSH CS shift unresolved, bar ", barIndex);
       return(false);
      }
 
    double l1c, l1p, l2c, l2p;
-   if(!loadCurrencyStrengthValues(timeframe, strengthShift, l1c, l1p, l2c, l2p))
+   // Try configured timeframe first
+   if(!loadCurrencyStrengthValues(cs_timeframe, strengthShift, l1c, l1p, l2c, l2p))
      {
       if(cs_filter_debug_logs)
-         Print("3LSH CS values missing for bar ", barIndex, " tf=", timeframe, " shift=", strengthShift, " - no fallback performed");
+         Print("3LSH CS values missing, bar ", barIndex, " shift ", strengthShift,
+               " trying fallback...");
+
+      // Do NOT fallback from M1 to M5. Require the requested cs_timeframe data
+      // If values are missing for the configured timeframe, fail the filter.
+      if(cs_filter_debug_logs)
+         Print("3LSH CS values missing for bar ", barIndex, " timeframe=", cs_timeframe, " - no fallback performed");
       return(false);
      }
 
@@ -539,7 +404,7 @@ bool passesCurrencyStrengthFilterTf(int barIndex, int direction, int timeframe)
    else if(l1c < l2c) signal = -1;
 
    if(cs_filter_debug_logs)
-      Print("3LSH CS bar=", barIndex, " tf=", timeframe, " shift=", strengthShift, " dir=", direction,
+      Print("3LSH CS bar=", barIndex, " shift=", strengthShift, " dir=", direction,
             " l1=", l1c, "/", l1p, " l2=", l2c, "/", l2p, " signal=", signal);
 
    if(direction == OP_BUY)
@@ -549,13 +414,13 @@ bool passesCurrencyStrengthFilterTf(int barIndex, int direction, int timeframe)
    return false;
   }
 
-int resolveCurrencyStrengthShiftTf(int barIndex, int timeframe)
+int resolveCurrencyStrengthShift(int barIndex)
   {
-   if(timeframe == Period())
+   if(cs_timeframe == Period())
       return barIndex;
-   int shift = iBarShift(Symbol(), timeframe, Time[barIndex], true);
+   int shift = iBarShift(Symbol(), cs_timeframe, Time[barIndex], true);
    if(shift < 0)
-      shift = iBarShift(Symbol(), timeframe, Time[barIndex], false);
+      shift = iBarShift(Symbol(), cs_timeframe, Time[barIndex], false);
    return shift;
   }
 
