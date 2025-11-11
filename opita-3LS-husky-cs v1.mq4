@@ -136,6 +136,7 @@ input int        cs_line1_buffer        = 0;                     // Line 1 buffe
 input int        cs_line2_buffer        = 1;                     // Line 2 buffer
 input bool       cs_require_cross       = false;                 // Require fresh crossover
 input bool       cs_filter_debug_logs   = false;                 // Debug logging
+input bool       cs_swap_lines          = false;                 // Swap L1/L2 after read (use if buffers are reversed)
 input bool       exit_alerts            = false;                 // Send alert when blocked marker (X) is placed (exit alert)
 
 extern settings husky            = 0;                               // ===== HuskyBands Settings =====
@@ -306,8 +307,8 @@ int start()
           {
            if(cs_filter_debug_logs)
               Print("3LSH CS filter veto BUY @bar ", i);
-           // place blocked marker where buy arrow would be
-           blockedBuyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
+           // place blocked marker where buy arrow would be (swapped X placement)
+           blockedBuyBuff[i] = High[i] + getPoint() * ls_arrow_gap;
            // Optional exit alert when the blocked marker (X) is created
            if(exit_alerts)
               doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked BUY at bar " + IntegerToString(i));
@@ -339,8 +340,8 @@ int start()
           {
            if(cs_filter_debug_logs)
               Print("3LSH CS filter veto SELL @bar ", i);
-           // place blocked marker where sell arrow would be
-           blockedSellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
+           // place blocked marker where sell arrow would be (swapped X placement)
+           blockedSellBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
            // Optional exit alert when the blocked marker (X) is created
            if(exit_alerts)
               doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked SELL at bar " + IntegerToString(i));
@@ -442,6 +443,16 @@ bool loadCurrencyStrengthValues(int tf, int shift, double &l1c, double &l1p,
      l1p = iCustom(Symbol(), tf, name, cs_line1_buffer, shift + 1);
      l2c = iCustom(Symbol(), tf, name, cs_line2_buffer, shift);
      l2p = iCustom(Symbol(), tf, name, cs_line2_buffer, shift + 1);
+    }
+
+  // Optional swap if indicator buffers are reversed relative to base/quote
+  if(cs_swap_lines)
+    {
+     double t1 = l1c, t2 = l1p;
+     l1c = l2c; l1p = l2p;
+     l2c = t1;  l2p = t2;
+     if(cs_filter_debug_logs)
+        Print("3LSH CS note: swapped L1/L2 due to cs_swap_lines=true");
     }
 
   // If values exist, return early

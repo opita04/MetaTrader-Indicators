@@ -36,15 +36,16 @@ extern bool   FullChartBackground = true;   // Background covers whole chart
 extern string DashboardFont = "Arial Bold"; // Dashboard Font
 extern int    DashboardTitleSize = 14;      // Title Font Size
 extern int    DashboardFontSize = 9;        // Table Font Size
-extern color  DashboardBgColor = C'255,228,181'; // Background Color (Moccasin)
-extern color  HeaderBgColor = C'0,100,200'; // Header Background Color (Blue)
+extern color  DashboardBgColor = clrOldLace; // Background Color (TurtleSoup-style)
+extern color  HeaderBgColor = clrDeepSkyBlue; // Header Background Color (Blue)
 extern color  HeaderTextColor = clrWhite;   // Header Text Color
 extern color  TableTextColor = clrBlack;     // Table Text Color
+extern color  TableCellBgColor = clrAliceBlue; // Table Cell Background Color
 extern color  UpSignalColor = clrBlue;      // Up Signal Color
 extern color  DownSignalColor = clrRed;     // Down Signal Color
 extern color  NeutralColor = clrYellow;     // Neutral Color
 extern bool   ShowGridLines = true;         // Show grid lines between cells
-extern color  GridLineColor = clrBlack;      // Grid line color
+extern color  GridLineColor = C'38,38,38';      // Grid line color
 
 //--- Pair Selection Settings
 extern string __PairSettings = ""; // Pair Selection Settings
@@ -415,239 +416,188 @@ void GetPairsFromCommaList(string &pairs[])
 void CreateDashboard()
 {
     string objName;
-    int xPos, yPos;
-    int rowHeight = 22;
-    int colWidth = 80;
-    int pairColWidth = 70;
-    
-    // Calculate dashboard dimensions
-    int dashboardWidth = pairColWidth + (NumTimeframes * colWidth) + 20;
-    int dashboardHeight = 45 + (TotalPairs * rowHeight) + 25;
+    int rowHeight = 32;
+    int headerHeight = 32;
+    int pairColWidth = 110;
+    int arrowColWidth = 75;
+    int ageColWidth = 80;
+    int gridOverlap = 0;
 
-    // Main background
+    int totalColumns = 1 + NumTimeframes * 2;
+    int columnWidths[];
+    ArrayResize(columnWidths, totalColumns);
+    columnWidths[0] = pairColWidth;
+    for(int tf = 0, col = 1; tf < NumTimeframes; tf++)
+    {
+        columnWidths[col++] = arrowColWidth;
+        columnWidths[col++] = ageColWidth;
+    }
+
+    int columnLeft[];
+    ArrayResize(columnLeft, totalColumns);
+    columnLeft[0] = DashboardX;
+    for(int c = 1; c < totalColumns; c++)
+    {
+        columnLeft[c] = columnLeft[c - 1] + columnWidths[c - 1] - 1; // Border overlap like TurtleSoup
+    }
+
+    int tableWidth = columnLeft[totalColumns - 1] + columnWidths[totalColumns - 1] - DashboardX;
+    int headerY = DashboardY + 40;
+    int dataStartY = headerY + headerHeight - 1; // Border overlap
+    int tableHeight = headerHeight + (TotalPairs > 0 ? (TotalPairs * (rowHeight - 1)) + 1 : 0);
+    int dashboardHeight = (headerY - DashboardY) + tableHeight + 20;
+
     objName = DashboardPrefix + "Background";
     ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-
     if(FullChartBackground)
     {
-        // Cover whole chart area
         ObjectSet(objName, OBJPROP_XDISTANCE, 0);
         ObjectSet(objName, OBJPROP_YDISTANCE, 0);
-        ObjectSet(objName, OBJPROP_XSIZE, 2000); // Large width to cover chart
-        ObjectSet(objName, OBJPROP_YSIZE, 1500); // Large height to cover chart
+        ObjectSet(objName, OBJPROP_XSIZE, 2000);
+        ObjectSet(objName, OBJPROP_YSIZE, 1500);
     }
     else
     {
-        // Standard dashboard background
         ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
         ObjectSet(objName, OBJPROP_YDISTANCE, DashboardY);
-        ObjectSet(objName, OBJPROP_XSIZE, dashboardWidth);
+        ObjectSet(objName, OBJPROP_XSIZE, tableWidth);
         ObjectSet(objName, OBJPROP_YSIZE, dashboardHeight);
     }
     ObjectSet(objName, OBJPROP_BGCOLOR, DashboardBgColor);
     ObjectSet(objName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
     ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-    ObjectSet(objName, OBJPROP_BACK, false); // Bring to front to cover chart
+    ObjectSet(objName, OBJPROP_BACK, false);
 
-    // Title
-    yPos = DashboardY + 8;
     objName = DashboardPrefix + "Title";
     ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-    ObjectSet(objName, OBJPROP_BACK, false); // Bring to front
-    ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX + (dashboardWidth / 2));
-    ObjectSet(objName, OBJPROP_YDISTANCE, yPos);
+    ObjectSet(objName, OBJPROP_BACK, false);
+    ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX + tableWidth / 2);
+    ObjectSet(objName, OBJPROP_YDISTANCE, DashboardY + 10);
     ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
     ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
     ObjectSetText(objName, "Currency Strength Dashboard", DashboardTitleSize, DashboardFont, TableTextColor);
 
-    // Header row background
-    yPos += 25;
-    objName = DashboardPrefix + "HeaderBg";
-    ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-    ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
-    ObjectSet(objName, OBJPROP_YDISTANCE, yPos);
-    ObjectSet(objName, OBJPROP_XSIZE, dashboardWidth);
-    ObjectSet(objName, OBJPROP_YSIZE, rowHeight);
-    ObjectSet(objName, OBJPROP_BGCOLOR, HeaderBgColor);
-    ObjectSet(objName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-    ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-    ObjectSet(objName, OBJPROP_BACK, false);
-
-    // Header labels
-    objName = DashboardPrefix + "Header_Pair";
-    ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-    ObjectSet(objName, OBJPROP_BACK, false); // Bring to front
-    // Left-pad header text within the PAIR column for consistent alignment
-    ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX + 6);
-    ObjectSet(objName, OBJPROP_YDISTANCE, yPos + 5);
-    ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-    ObjectSetText(objName, "PAIR", DashboardFontSize, DashboardFont, HeaderTextColor);
-    ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-    // Timeframe headers
-    for(int tf = 0; tf < NumTimeframes; tf++)
+    for(int headerCol = 0; headerCol < totalColumns; headerCol++)
     {
-        xPos = DashboardX + pairColWidth + (tf * colWidth) + (colWidth / 2);
-        objName = DashboardPrefix + "Header_TF" + (string)tf;
-        ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false); // Bring to front
-        ObjectSet(objName, OBJPROP_XDISTANCE, xPos);
-        ObjectSet(objName, OBJPROP_YDISTANCE, yPos + 5);
-        ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
-        ObjectSetText(objName, GetTimeframeString(Timeframes[tf]), DashboardFontSize, DashboardFont, HeaderTextColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-    }
+        int headerCellWidth = columnWidths[headerCol];
+        int headerCellHeight = headerHeight;
+        string headerCellBg = DashboardPrefix + "Header_Cell_" + (string)headerCol;
+        ObjectCreate(headerCellBg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+        ObjectSet(headerCellBg, OBJPROP_BACK, false);
+        ObjectSet(headerCellBg, OBJPROP_XDISTANCE, columnLeft[headerCol]);
+        ObjectSet(headerCellBg, OBJPROP_YDISTANCE, headerY);
+        ObjectSet(headerCellBg, OBJPROP_XSIZE, headerCellWidth);
+        ObjectSet(headerCellBg, OBJPROP_YSIZE, headerCellHeight);
+        ObjectSet(headerCellBg, OBJPROP_BGCOLOR, HeaderBgColor);
+        ObjectSet(headerCellBg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+        ObjectSet(headerCellBg, OBJPROP_COLOR, GridLineColor);
+        ObjectSet(headerCellBg, OBJPROP_WIDTH, 1);
+        ObjectSet(headerCellBg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+        ObjectSet(headerCellBg, OBJPROP_SELECTABLE, false);
+        ObjectSet(headerCellBg, OBJPROP_HIDDEN, true);
 
-    // Create grid lines (if enabled)
-    if(ShowGridLines)
-    {
-        int gridLineThickness = 1;
-        int tableTop = yPos;
-        int tableBottom = yPos + rowHeight + (TotalPairs * rowHeight);
-        int tableRight = DashboardX + pairColWidth + (NumTimeframes * colWidth);
-
-        // Top border
-        objName = DashboardPrefix + "Grid_H_Top";
-        ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false);
-        ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
-        ObjectSet(objName, OBJPROP_YDISTANCE, tableTop);
-        ObjectSet(objName, OBJPROP_XSIZE, tableRight - DashboardX);
-        ObjectSet(objName, OBJPROP_YSIZE, gridLineThickness);
-        ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-        // Horizontal line after header row
-        objName = DashboardPrefix + "Grid_H_Header";
-        ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false);
-        ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
-        ObjectSet(objName, OBJPROP_YDISTANCE, tableTop + rowHeight);
-        ObjectSet(objName, OBJPROP_XSIZE, tableRight - DashboardX);
-        ObjectSet(objName, OBJPROP_YSIZE, gridLineThickness);
-        ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-        // Left border
-        objName = DashboardPrefix + "Grid_V_Left";
-        ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false);
-        ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
-        ObjectSet(objName, OBJPROP_YDISTANCE, tableTop);
-        ObjectSet(objName, OBJPROP_XSIZE, gridLineThickness);
-        ObjectSet(objName, OBJPROP_YSIZE, tableBottom - tableTop);
-        ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-        // Vertical line after PAIR column
-        objName = DashboardPrefix + "Grid_V_Pair";
-        ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false);
-        ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX + pairColWidth);
-        ObjectSet(objName, OBJPROP_YDISTANCE, tableTop);
-        ObjectSet(objName, OBJPROP_XSIZE, gridLineThickness);
-        ObjectSet(objName, OBJPROP_YSIZE, tableBottom - tableTop);
-        ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-        // Vertical lines between timeframe columns (including right border)
-        for(tf = 0; tf < NumTimeframes; tf++)
+        int headerCenterY = headerY + (headerCellHeight / 2);
+        if(headerCol == 0)
         {
-            objName = DashboardPrefix + "Grid_V_TF" + (string)tf;
-            ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-            ObjectSet(objName, OBJPROP_BACK, false);
-            ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX + pairColWidth + (tf + 1) * colWidth);
-            ObjectSet(objName, OBJPROP_YDISTANCE, tableTop);
-            ObjectSet(objName, OBJPROP_XSIZE, gridLineThickness);
-            ObjectSet(objName, OBJPROP_YSIZE, tableBottom - tableTop);
-            ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
-            ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-        }
-
-        // Bottom border
-        objName = DashboardPrefix + "Grid_H_Bottom";
-        ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false);
-        ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
-        ObjectSet(objName, OBJPROP_YDISTANCE, tableBottom);
-        ObjectSet(objName, OBJPROP_XSIZE, tableRight - DashboardX);
-        ObjectSet(objName, OBJPROP_YSIZE, gridLineThickness);
-        ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-    }
-
-    // Create pair rows
-    yPos += rowHeight;
-    for(int i = 0; i < TotalPairs; i++)
-    {
-        // Pair name
-        objName = DashboardPrefix + "Pair_" + i + "_Name";
-        ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-        ObjectSet(objName, OBJPROP_BACK, false); // Bring to front
-        // Left-pad pair name within the PAIR column for consistent alignment
-        ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX + 6);
-        ObjectSet(objName, OBJPROP_YDISTANCE, yPos + 5);
-        ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
-        ObjectSetText(objName, Pairs[i], DashboardFontSize, DashboardFont, TableTextColor);
-        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-        // Timeframe signals
-        for(int t = 0; t < NumTimeframes; t++)
-        {
-            xPos = DashboardX + pairColWidth + (t * colWidth) + (colWidth / 2);
-            objName = DashboardPrefix + "Pair_" + i + "_TF" + (string)t;
+            objName = DashboardPrefix + "Header_Pair";
             ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-            ObjectSet(objName, OBJPROP_BACK, false); // Bring to front
-            ObjectSet(objName, OBJPROP_XDISTANCE, xPos);
-            ObjectSet(objName, OBJPROP_YDISTANCE, yPos + (rowHeight/4));
-            ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
-            ObjectSetText(objName, CharToString(232), DashboardFontSize + 2, "Wingdings", NeutralColor);
-            ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-            ObjectSet(objName, OBJPROP_SELECTABLE, true); // Make clickable
-            ObjectSet(objName, OBJPROP_SELECTED, false);
-            // Create an age square centered below the arrow inside the same TF cell
-            int ageWidth = MathMin(30, colWidth - 10);
-            int ageHeight = 12;
-            int ageLeft = xPos - (ageWidth / 2);
-            int ageTop = yPos + rowHeight - ageHeight - 4;
-
-            string objNameAgeBg = DashboardPrefix + "Pair_" + i + "_TF" + (string)t + "_AgeBg";
-            ObjectCreate(objNameAgeBg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-            ObjectSet(objNameAgeBg, OBJPROP_BACK, false);
-            ObjectSet(objNameAgeBg, OBJPROP_XDISTANCE, ageLeft);
-            ObjectSet(objNameAgeBg, OBJPROP_YDISTANCE, ageTop);
-            ObjectSet(objNameAgeBg, OBJPROP_XSIZE, ageWidth);
-            ObjectSet(objNameAgeBg, OBJPROP_YSIZE, ageHeight);
-            ObjectSet(objNameAgeBg, OBJPROP_BGCOLOR, DashboardBgColor);
-            ObjectSet(objNameAgeBg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
-            ObjectSet(objNameAgeBg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-
-            string objNameAge = DashboardPrefix + "Pair_" + i + "_TF" + (string)t + "_Age";
-            ObjectCreate(objNameAge, OBJ_LABEL, 0, 0, 0);
-            ObjectSet(objNameAge, OBJPROP_BACK, false);
-            ObjectSet(objNameAge, OBJPROP_XDISTANCE, xPos);
-            ObjectSet(objNameAge, OBJPROP_YDISTANCE, ageTop + (ageHeight/2));
-            ObjectSet(objNameAge, OBJPROP_ANCHOR, ANCHOR_CENTER);
-            // Smaller font for the age text; initial empty
-            ObjectSetText(objNameAge, "", MathMax(6, DashboardFontSize - 1), DashboardFont, TableTextColor);
-            ObjectSet(objNameAge, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-        }
-
-        // Horizontal grid line after this row (except for the last row)
-        if(ShowGridLines && i < TotalPairs - 1)
-        {
-            objName = DashboardPrefix + "Grid_H_Row" + (string)i;
-            ObjectCreate(objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
             ObjectSet(objName, OBJPROP_BACK, false);
-            ObjectSet(objName, OBJPROP_XDISTANCE, DashboardX);
-            ObjectSet(objName, OBJPROP_YDISTANCE, yPos + rowHeight);
-            ObjectSet(objName, OBJPROP_XSIZE, dashboardWidth);
-            ObjectSet(objName, OBJPROP_YSIZE, 1); // 1 pixel thickness
-            ObjectSet(objName, OBJPROP_BGCOLOR, GridLineColor);
+            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + 12);
+            ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+            ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
             ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+            ObjectSetText(objName, "PAIR", DashboardFontSize, DashboardFont, HeaderTextColor);
         }
+        else if(headerCol % 2 == 1)
+        {
+            int tfIdxHeader1 = (headerCol - 1) / 2;
+            objName = DashboardPrefix + "Header_TF" + (string)tfIdxHeader1;
+            ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+            ObjectSet(objName, OBJPROP_BACK, false);
+            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2);
+            ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+            ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+            ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+            ObjectSetText(objName, GetTimeframeString(Timeframes[tfIdxHeader1]), DashboardFontSize, DashboardFont, HeaderTextColor);
+        }
+        else
+        {
+            int tfIdxHeader2 = (headerCol - 2) / 2;
+            objName = DashboardPrefix + "Header_TF" + (string)tfIdxHeader2 + "_Age";
+            ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+            ObjectSet(objName, OBJPROP_BACK, false);
+            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2);
+            ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+            ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+            ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+            ObjectSetText(objName, "Age", DashboardFontSize, DashboardFont, HeaderTextColor);
+        }
+    }
 
-        yPos += rowHeight;
+    int rowY = dataStartY;
+    for(int rowIndex = 0; rowIndex < TotalPairs; rowIndex++)
+    {
+        for(int dataCol = 0; dataCol < totalColumns; dataCol++)
+        {
+            int dataCellWidth = columnWidths[dataCol];
+            int dataCellHeight = rowHeight;
+            string dataCellBg = DashboardPrefix + "Cell_" + (string)rowIndex + "_" + (string)dataCol + "_Bg";
+            ObjectCreate(dataCellBg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+            ObjectSet(dataCellBg, OBJPROP_BACK, false);
+            ObjectSet(dataCellBg, OBJPROP_XDISTANCE, columnLeft[dataCol]);
+            ObjectSet(dataCellBg, OBJPROP_YDISTANCE, rowY);
+            ObjectSet(dataCellBg, OBJPROP_XSIZE, dataCellWidth);
+            ObjectSet(dataCellBg, OBJPROP_YSIZE, dataCellHeight);
+            ObjectSet(dataCellBg, OBJPROP_BGCOLOR, TableCellBgColor);
+            ObjectSet(dataCellBg, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+            ObjectSet(dataCellBg, OBJPROP_COLOR, GridLineColor);
+            ObjectSet(dataCellBg, OBJPROP_WIDTH, 1);
+            ObjectSet(dataCellBg, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+            ObjectSet(dataCellBg, OBJPROP_SELECTABLE, false);
+            ObjectSet(dataCellBg, OBJPROP_HIDDEN, true);
+
+            int centerX = columnLeft[dataCol] + dataCellWidth / 2;
+            int centerY = rowY + (dataCellHeight / 2);
+            if(dataCol == 0)
+            {
+                objName = DashboardPrefix + "Pair_" + (string)rowIndex + "_Name";
+                ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                ObjectSet(objName, OBJPROP_BACK, false);
+                ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[dataCol] + 12);
+                ObjectSet(objName, OBJPROP_YDISTANCE, centerY);
+                ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+                ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                ObjectSetText(objName, Pairs[rowIndex], DashboardFontSize, DashboardFont, TableTextColor);
+            }
+            else if(dataCol % 2 == 1)
+            {
+                int tfIdxData1 = (dataCol - 1) / 2;
+                objName = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)tfIdxData1;
+                ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                ObjectSet(objName, OBJPROP_BACK, false);
+                ObjectSet(objName, OBJPROP_XDISTANCE, centerX);
+                ObjectSet(objName, OBJPROP_YDISTANCE, centerY);
+                ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                ObjectSetText(objName, CharToString(232), DashboardFontSize + 2, "Wingdings", NeutralColor);
+                ObjectSet(objName, OBJPROP_SELECTABLE, true);
+                ObjectSet(objName, OBJPROP_SELECTED, false);
+            }
+            else
+            {
+                int tfIdxData2 = (dataCol - 2) / 2;
+                string ageName = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)tfIdxData2 + "_Age";
+                ObjectCreate(ageName, OBJ_LABEL, 0, 0, 0);
+                ObjectSet(ageName, OBJPROP_BACK, false);
+                ObjectSet(ageName, OBJPROP_XDISTANCE, centerX);
+                ObjectSet(ageName, OBJPROP_YDISTANCE, centerY);
+                ObjectSet(ageName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                ObjectSet(ageName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                ObjectSet(ageName, OBJPROP_SELECTABLE, false);
+                ObjectSetText(ageName, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+            }
+        }
+        rowY += rowHeight - 1; // Border overlap like TurtleSoup
     }
 }
 
@@ -712,7 +662,7 @@ void UpdateDashboard()
 
             // Update display
             objName = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf;
-            ObjectSetText(objName, signalText, DashboardFontSize + 2, "Wingdings", signalColor);
+			ObjectSetText(objName, signalText, DashboardFontSize + 2, "Wingdings", signalColor);
             // Update the age label for this timeframe
             string objNameAge = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf + "_Age";
             string ageText = "";
@@ -725,7 +675,7 @@ void UpdateDashboard()
                 // If we have a non-zero signal but no recorded time, use a placeholder
                 ageText = "<1m";
             }
-            ObjectSetText(objNameAge, ageText, MathMax(6, DashboardFontSize - 1), DashboardFont, TableTextColor);
+            ObjectSetText(objNameAge, ageText, MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
         }
     }
 }

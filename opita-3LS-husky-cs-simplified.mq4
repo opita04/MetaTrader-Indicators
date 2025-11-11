@@ -110,6 +110,7 @@ int        cs_line1_buffer        = 0;                     // Line 1 buffer
 int        cs_line2_buffer        = 1;                     // Line 2 buffer
 bool       cs_require_cross       = false;                 // Require fresh crossover
 bool       cs_filter_debug_logs   = false;                 // Debug logging
+bool       cs_swap_lines          = false;                 // Swap L1/L2 after read (use if buffers are reversed)
 bool useHuskyBands      = true;                            // Use HuskyBands?
 bool Show_HuskyBands    = false;                            // Show HuskyBands on chart
 ENUM_BAND_TYPE Band_Type = Median_Band;                 // Band Type (Median_Band or HighLow_Bands)
@@ -287,8 +288,8 @@ int start()
           {
            if(cs_filter_debug_logs)
               Print("3LSH CS filter veto BUY @bar ", i);
-           // place blocked marker where buy arrow would be
-           blockedBuyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
+           // place blocked marker where buy arrow would be (swapped X placement)
+           blockedBuyBuff[i] = High[i] + getPoint() * ls_arrow_gap;
            continue;
           }
          bool recentBuy = false;
@@ -317,8 +318,8 @@ int start()
           {
            if(cs_filter_debug_logs)
               Print("3LSH CS filter veto SELL @bar ", i);
-           // place blocked marker where sell arrow would be
-           blockedSellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
+           // place blocked marker where sell arrow would be (swapped X placement)
+           blockedSellBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
            continue;
           }
          bool recentSell = false;
@@ -443,6 +444,16 @@ bool loadCurrencyStrengthValues(int tf, int shift, double &l1c, double &l1p,
      l1p = iCustom(Symbol(), tf, name, cs_line1_buffer, shift + 1);
      l2c = iCustom(Symbol(), tf, name, cs_line2_buffer, shift);
      l2p = iCustom(Symbol(), tf, name, cs_line2_buffer, shift + 1);
+    }
+
+  // Optional swap if indicator buffers are reversed relative to base/quote
+  if(cs_swap_lines)
+    {
+     double t1 = l1c, t2 = l1p;
+     l1c = l2c; l1p = l2p;
+     l2c = t1;  l2p = t2;
+     if(cs_filter_debug_logs)
+        Print("3LSH CS note: swapped L1/L2 due to cs_swap_lines=true");
     }
 
   // If values exist, return early
