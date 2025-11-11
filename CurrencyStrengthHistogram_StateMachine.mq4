@@ -57,7 +57,7 @@ extern string IndicatorName = "CurrencyStrengthWizard"; // Source Indicator Name
 int    Line1Buffer = 0;             // Line 1 Buffer Number
 int    Line2Buffer = 1;             // Line 2 Buffer Number
 
-extern int    NumTimeframes = 4;            // Number of Timeframes to Display (1-4)
+extern int    NumTimeframes = 2;            // Number of Timeframes to Display (1-4)
 extern ENUM_TIMEFRAMES Timeframe4 = PERIOD_D1;   // Timeframe 4
 extern ENUM_TIMEFRAMES Timeframe3 = PERIOD_H1;   // Timeframe 3
 extern ENUM_TIMEFRAMES Timeframe2 = PERIOD_M5;  // Timeframe 2
@@ -314,6 +314,10 @@ int init()
     ArrayResize(TF2State, BarsToLookBack);
     ArrayResize(TF3State, BarsToLookBack);
     ArrayResize(TF4State, BarsToLookBack);
+    ArraySetAsSeries(TF1State, true);
+    ArraySetAsSeries(TF2State, true);
+    ArraySetAsSeries(TF3State, true);
+    ArraySetAsSeries(TF4State, true);
     ArrayInitialize(TF1State, 0);
     ArrayInitialize(TF2State, 0);
     ArrayInitialize(TF3State, 0);
@@ -350,16 +354,28 @@ int deinit()
 int start()
 {
     int counted_bars = IndicatorCounted();
-    int maxBarsToProcess = MathMin(Bars, BarsToLookBack);
+    int totalBars = MathMin(Bars, BarsToLookBack);
+    if(totalBars <= 0)
+        return(0);
+
+    static datetime lastCalcTime = 0;
+    bool isNewBar = (Time[0] != lastCalcTime);
+    if(isNewBar)
+        lastCalcTime = Time[0];
+
+    bool recalcAll = (counted_bars == 0) || isNewBar;
     int limit;
 
-    if(counted_bars > 0)
-        limit = Bars - counted_bars;
+    if(recalcAll)
+        limit = totalBars - 1;
     else
-        limit = maxBarsToProcess - 1;
+        limit = MathMin(Bars - counted_bars, totalBars - 1);
+
+    if(limit < 0)
+        limit = 0;
 
     // Initialize buffers
-    if(counted_bars == 0)
+    if(recalcAll)
     {
         ArrayInitialize(TF1UpBuffer, EMPTY_VALUE);
         ArrayInitialize(TF1DownBuffer, EMPTY_VALUE);
@@ -385,10 +401,26 @@ int start()
     }
 
     // Ensure state arrays are large enough
-    if(ArraySize(TF1State) < Bars) ArrayResize(TF1State, Bars);
-    if(ArraySize(TF2State) < Bars) ArrayResize(TF2State, Bars);
-    if(ArraySize(TF3State) < Bars) ArrayResize(TF3State, Bars);
-    if(ArraySize(TF4State) < Bars) ArrayResize(TF4State, Bars);
+    if(ArraySize(TF1State) < Bars)
+    {
+        ArrayResize(TF1State, Bars);
+        ArraySetAsSeries(TF1State, true);
+    }
+    if(ArraySize(TF2State) < Bars)
+    {
+        ArrayResize(TF2State, Bars);
+        ArraySetAsSeries(TF2State, true);
+    }
+    if(ArraySize(TF3State) < Bars)
+    {
+        ArrayResize(TF3State, Bars);
+        ArraySetAsSeries(TF3State, true);
+    }
+    if(ArraySize(TF4State) < Bars)
+    {
+        ArrayResize(TF4State, Bars);
+        ArraySetAsSeries(TF4State, true);
+    }
 
     int rv = Bars;
     // Use fixed level spacing
@@ -498,7 +530,6 @@ int start()
     }
 
     // Clear unused timeframe buffers completely
-    int totalBars = MathMin(Bars, BarsToLookBack);
     for(int i = totalBars - 1; i >= 0; i--)
     {
         if(NumTimeframes < 4)
@@ -535,23 +566,10 @@ int start()
                 ObjectDelete(objName2);
         }
 
-        int prevState = 0;
-        
-        // Scan from oldest to newest, use TF1 state array
-        for(int b = totalBars - 1; b >= 0; b--)
-        {
-            int state = GetStateArray(0, b); // Get TF1 state
-            
-            // Mark transitions to confirmed states (3 or -3)
-            if((state == 3 || state == -3) && state != prevState)
-            {
-                string vname = "VLine_SM_" + IntegerToString((int)Time[b]);
-                color vcol = (state == 3) ? TF1UpColor : TF1DownColor;
-                DrawVerticalLine(vname, Time[b], vcol, VerticalLineStyle, VerticalLineWidth);
-            }
+        DrawTimeframeVerticalLines(0, "VLine_SM_TF1_", VerticalLineStyle, VerticalLineWidth, TF1UpColor, TF1DownColor, totalBars);
 
-            if(state != 0) prevState = state;
-        }
+        if(NumTimeframes >= 2)
+            DrawTimeframeVerticalLines(1, "VLine_SM_TF2_", STYLE_DASH, VerticalLineWidth, TF2UpColor, TF2DownColor, totalBars);
     }
     else
     {
@@ -846,6 +864,30 @@ void DrawVerticalLine(string name, datetime time, color col, int style, int widt
         ObjectSet(name, OBJPROP_STYLE, style);
         ObjectSet(name, OBJPROP_WIDTH, width);
         ObjectSet(name, OBJPROP_BACK, true);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw vertical lines for a timeframe                              |
+//+------------------------------------------------------------------+
+void DrawTimeframeVerticalLines(int tf_idx, string prefix, int lineStyle, int lineWidth,
+                                color upColor, color downColor, int totalBars)
+{
+    int prevState = 0;
+
+    for(int b = totalBars - 1; b >= 0; b--)
+    {
+        int state = GetStateArray(tf_idx, b);
+
+        if((state == 3 || state == -3) && state != prevState)
+        {
+            string vname = prefix + IntegerToString((int)Time[b]);
+            color vcol = (state == 3) ? upColor : downColor;
+            DrawVerticalLine(vname, Time[b], vcol, lineStyle, lineWidth);
+        }
+
+        if(state != 0)
+            prevState = state;
     }
 }
 
