@@ -11,7 +11,7 @@ Compatibility: MetaTrader 4 (MT4)
 */
 //+------------------------------------------------------------------+
 #property copyright "Currency Strength Dashboard"
-#property version   "2.00"
+#property version   "3.20"
 
 // Import Windows API functions for chart opening
 #import "user32.dll"
@@ -41,11 +41,29 @@ extern color  HeaderBgColor = clrDeepSkyBlue; // Header Background Color (Blue)
 extern color  HeaderTextColor = clrWhite;   // Header Text Color
 extern color  TableTextColor = clrBlack;     // Table Text Color
 extern color  TableCellBgColor = clrAliceBlue; // Table Cell Background Color
-extern color  UpSignalColor = clrBlue;      // Up Signal Color
-extern color  DownSignalColor = clrRed;     // Down Signal Color
+extern color  UpSignalColor = clrBlue;      // Up Signal Color (legacy - used if strength coloring disabled)
+extern color  DownSignalColor = clrRed;     // Down Signal Color (legacy - used if strength coloring disabled)
 extern color  NeutralColor = clrYellow;     // Neutral Color
-extern bool   ShowGridLines = true;         // Show grid lines between cells
+extern bool   UseStrengthColoring = true;   // Use strength-based color coding
+extern double StrengthHighThreshold = 5.0;  // High strength threshold (difference >= this)
+extern double StrengthMediumThreshold = 2.0; // Medium strength threshold (difference >= this)
+extern color  UpHighColor = clrGreen;       // Up arrow color for high strength (diff >= 5.0) - Green
+extern color  UpMediumColor = clrLimeGreen; // Up arrow color for medium strength (2.0 <= diff < 5.0) - Light Green
+extern color  UpLowColor = clrLightBlue;    // Up arrow color for low strength (0.01 <= diff < 2.0) - Light Blue
+extern color  DownHighColor = clrRed;       // Down arrow color for high strength (diff >= 5.0)
+extern color  DownMediumColor = C'255,165,0'; // Down arrow color for medium strength (2.0 <= diff < 5.0) - Orange
+extern color  DownLowColor = C'255,182,193'; // Down arrow color for low strength (0.01 <= diff < 2.0) - Light Pink
 extern color  GridLineColor = C'38,38,38';      // Grid line color
+extern bool   ShowGridLines = true;         // Show grid lines between cells
+extern bool   ShowAgeColumn = true;         // Show Age column for signal timestamps
+extern bool   ShowValueColumns = true;      // Show currency strength value columns
+extern int    ValueColumnWidth = 70;        // Currency value column width
+extern int    RowHeight = 32;               // Grid row height (cell height)
+extern int    HeaderHeight = 32;            // Grid header height
+extern int    PairColumnWidth = 0;          // Pair column width (0 = auto-size based on content)
+extern int    ArrowColumnWidth = 35;        // Arrow column width
+extern int    AgeColumnWidth = 50;          // Age column width
+extern int    CenterOffset = -4;            // Center position offset (negative = shift left, positive = shift right)
 
 //--- Pair Selection Settings
 extern string __PairSettings = ""; // Pair Selection Settings
@@ -68,6 +86,7 @@ extern bool   AlertTF1 = false;      // Alert on TF1 Direction Change
 extern bool   AlertTF2 = false;      // Alert on TF2 Direction Change
 extern bool   AlertTF3 = false;      // Alert on TF3 Direction Change
 extern bool   AlertTF4 = false;      // Alert on TF4 Direction Change
+extern bool   AlertTF1TF2Alignment = false; // Alert when TF1 and TF2 align (both UP or both DOWN)
 
 //--- Indicator Settings
 extern string __IndicatorName = ""; // Indicator Settings
@@ -94,6 +113,8 @@ ENUM_TIMEFRAMES Timeframes[4]; // Array of active timeframes
 bool AlertEnabled[4];     // Alert enabled for each timeframe
 int PreviousSignals[]; // Previous signals for each pair and timeframe [pair*4 + tf]
 datetime PreviousSignalTime[]; // Timestamp of last signal change for each pair/timeframe [pair*4 + tf]
+datetime LastBarTime[]; // Last bar time for each pair and timeframe [pair*4 + tf] - used for candle close detection
+bool PreviousTF1TF2Alignment[]; // Previous alignment state for each pair (true = aligned, false = not aligned)
 string BotName = "Currency Strength Dashboard"; // Bot name for alerts
 
 //+------------------------------------------------------------------+
@@ -102,6 +123,20 @@ string BotName = "Currency Strength Dashboard"; // Bot name for alerts
 int GetPreviousSignalIndex(int pairIndex, int timeframeIndex)
 {
     return pairIndex * 4 + timeframeIndex;
+}
+
+//+------------------------------------------------------------------+
+//| Check if a new bar has formed (candle close detection)          |
+//+------------------------------------------------------------------+
+bool IsNewBar(string symbol, ENUM_TIMEFRAMES timeframe, int signalIndex)
+{
+    datetime currentBarTime = iTime(symbol, timeframe, 0);
+    if(currentBarTime != LastBarTime[signalIndex])
+    {
+        LastBarTime[signalIndex] = currentBarTime;
+        return true; // New bar formed
+    }
+    return false; // Same bar
 }
 
 //+------------------------------------------------------------------+
@@ -147,6 +182,18 @@ int OnInit()
     for(int ti = 0; ti < TotalPairs * 4; ti++)
     {
         PreviousSignalTime[ti] = 0; // No timestamp yet
+    }
+    // Initialize last bar time array for candle close detection
+    ArrayResize(LastBarTime, TotalPairs * 4);
+    for(int bi = 0; bi < TotalPairs * 4; bi++)
+    {
+        LastBarTime[bi] = 0; // Initialize to 0
+    }
+    // Initialize previous TF1+TF2 alignment array
+    ArrayResize(PreviousTF1TF2Alignment, TotalPairs);
+    for(int ai = 0; ai < TotalPairs; ai++)
+    {
+        PreviousTF1TF2Alignment[ai] = false; // Initialize to not aligned
     }
 
     // Set indicator name
@@ -416,21 +463,58 @@ void GetPairsFromCommaList(string &pairs[])
 void CreateDashboard()
 {
     string objName;
-    int rowHeight = 32;
-    int headerHeight = 32;
-    int pairColWidth = 110;
-    int arrowColWidth = 75;
-    int ageColWidth = 80;
     int gridOverlap = 0;
+    int tfIdx;
 
-    int totalColumns = 1 + NumTimeframes * 2;
+    // Calculate pair column width based on longest pair name (or use fixed width if specified)
+    int pairColWidth;
+    if(PairColumnWidth > 0)
+    {
+        pairColWidth = PairColumnWidth; // Use fixed width
+    }
+    else
+    {
+        pairColWidth = 60; // Minimum width for auto-sizing
+        for(int p = 0; p < TotalPairs; p++)
+        {
+            int nameWidth = StringLen(Pairs[p]) * 8 + 12;
+            if(nameWidth > pairColWidth) pairColWidth = nameWidth;
+        }
+        // Also check "PAIR" header text
+        int pairHeaderWidth = StringLen("PAIR") * 8 + 12;
+        if(pairHeaderWidth > pairColWidth) pairColWidth = pairHeaderWidth;
+    }
+    
+    // Arrow column width (use parameter)
+    int arrowColWidth = ArrowColumnWidth;
+    
+    // Age column width (use parameter if ShowAgeColumn is enabled)
+    int ageColWidth = ShowAgeColumn ? AgeColumnWidth : 0;
+    
+    // Value column width (use parameter if ShowValueColumns is enabled)
+    int valueColWidth = ShowValueColumns ? ValueColumnWidth : 0;
+
+    // Calculate total columns: 1 (pair) + for each TF: arrow + (age if enabled) + (2 value columns if enabled)
+    int columnsPerTF = 1; // Arrow
+    if(ShowAgeColumn) columnsPerTF++;
+    if(ShowValueColumns) columnsPerTF += 2; // Two value columns (currency1 and currency2)
+    
+    int totalColumns = 1 + NumTimeframes * columnsPerTF;
     int columnWidths[];
     ArrayResize(columnWidths, totalColumns);
     columnWidths[0] = pairColWidth;
     for(int tf = 0, col = 1; tf < NumTimeframes; tf++)
     {
         columnWidths[col++] = arrowColWidth;
-        columnWidths[col++] = ageColWidth;
+        if(ShowAgeColumn)
+        {
+            columnWidths[col++] = ageColWidth;
+        }
+        if(ShowValueColumns)
+        {
+            columnWidths[col++] = valueColWidth; // Currency 1
+            columnWidths[col++] = valueColWidth; // Currency 2
+        }
     }
 
     int columnLeft[];
@@ -443,8 +527,8 @@ void CreateDashboard()
 
     int tableWidth = columnLeft[totalColumns - 1] + columnWidths[totalColumns - 1] - DashboardX;
     int headerY = DashboardY + 40;
-    int dataStartY = headerY + headerHeight - 1; // Border overlap
-    int tableHeight = headerHeight + (TotalPairs > 0 ? (TotalPairs * (rowHeight - 1)) + 1 : 0);
+    int dataStartY = headerY + HeaderHeight - 1; // Border overlap
+    int tableHeight = HeaderHeight + (TotalPairs > 0 ? (TotalPairs * (RowHeight - 1)) + 1 : 0);
     int dashboardHeight = (headerY - DashboardY) + tableHeight + 20;
 
     objName = DashboardPrefix + "Background";
@@ -480,7 +564,7 @@ void CreateDashboard()
     for(int headerCol = 0; headerCol < totalColumns; headerCol++)
     {
         int headerCellWidth = columnWidths[headerCol];
-        int headerCellHeight = headerHeight;
+        int headerCellHeight = HeaderHeight;
         string headerCellBg = DashboardPrefix + "Header_Cell_" + (string)headerCol;
         ObjectCreate(headerCellBg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
         ObjectSet(headerCellBg, OBJPROP_BACK, false);
@@ -496,41 +580,91 @@ void CreateDashboard()
         ObjectSet(headerCellBg, OBJPROP_SELECTABLE, false);
         ObjectSet(headerCellBg, OBJPROP_HIDDEN, true);
 
-        int headerCenterY = headerY + (headerCellHeight / 2);
+        // Calculate center position exactly like TurtleSoup: Y + H/2
+        int headerCenterY = headerY + headerCellHeight / 2;
         if(headerCol == 0)
         {
             objName = DashboardPrefix + "Header_Pair";
             ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
             ObjectSet(objName, OBJPROP_BACK, false);
-            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + 12);
+            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + 6);
             ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
             ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
             ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
             ObjectSetText(objName, "PAIR", DashboardFontSize, DashboardFont, HeaderTextColor);
         }
-        else if(headerCol % 2 == 1)
-        {
-            int tfIdxHeader1 = (headerCol - 1) / 2;
-            objName = DashboardPrefix + "Header_TF" + (string)tfIdxHeader1;
-            ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-            ObjectSet(objName, OBJPROP_BACK, false);
-            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2);
-            ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
-            ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
-            ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-            ObjectSetText(objName, GetTimeframeString(Timeframes[tfIdxHeader1]), DashboardFontSize, DashboardFont, HeaderTextColor);
-        }
         else
         {
-            int tfIdxHeader2 = (headerCol - 2) / 2;
-            objName = DashboardPrefix + "Header_TF" + (string)tfIdxHeader2 + "_Age";
-            ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-            ObjectSet(objName, OBJPROP_BACK, false);
-            ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2);
-            ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
-            ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
-            ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-            ObjectSetText(objName, "Age", DashboardFontSize, DashboardFont, HeaderTextColor);
+            // Calculate which timeframe and column type this is
+            int colOffset = headerCol - 1; // Skip pair column
+            tfIdx = 0;
+            int colInTF = 0;
+            int colsPerTF = 1; // Arrow
+            if(ShowAgeColumn) colsPerTF++;
+            if(ShowValueColumns) colsPerTF += 2;
+            
+            tfIdx = colOffset / colsPerTF;
+            colInTF = colOffset % colsPerTF;
+            
+            if(tfIdx < NumTimeframes)
+            {
+                if(colInTF == 0)
+                {
+                    // Arrow column - show timeframe name
+                    objName = DashboardPrefix + "Header_TF" + (string)tfIdx;
+                    ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                    ObjectSet(objName, OBJPROP_BACK, false);
+                    ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2 + CenterOffset);
+                    ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+                    ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                    ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                    ObjectSetText(objName, GetTimeframeString(Timeframes[tfIdx]), DashboardFontSize, DashboardFont, HeaderTextColor);
+                }
+                else if(colInTF == 1 && ShowAgeColumn)
+                {
+                    // Age column
+                    objName = DashboardPrefix + "Header_TF" + (string)tfIdx + "_Age";
+                    ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                    ObjectSet(objName, OBJPROP_BACK, false);
+                    ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2 + CenterOffset);
+                    ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+                    ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                    ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                    ObjectSetText(objName, "Age", DashboardFontSize, DashboardFont, HeaderTextColor);
+                }
+                else if(ShowValueColumns)
+                {
+                    // Value columns
+                    int headerValueColIdx = colInTF;
+                    if(ShowAgeColumn) headerValueColIdx--; // Adjust for age column
+                    headerValueColIdx -= 1; // Adjust for arrow column
+                    
+                    if(headerValueColIdx == 0)
+                    {
+                        // Currency 1 value column
+                        objName = DashboardPrefix + "Header_TF" + (string)tfIdx + "_Val1";
+                        ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                        ObjectSet(objName, OBJPROP_BACK, false);
+                        ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2 + CenterOffset);
+                        ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+                        ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                        ObjectSetText(objName, "C1", DashboardFontSize, DashboardFont, HeaderTextColor);
+                    }
+                    else if(headerValueColIdx == 1)
+                    {
+                        // Currency 2 value column
+                        objName = DashboardPrefix + "Header_TF" + (string)tfIdx + "_Val2";
+                        ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                        ObjectSet(objName, OBJPROP_BACK, false);
+                        ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[headerCol] + headerCellWidth / 2 + CenterOffset);
+                        ObjectSet(objName, OBJPROP_YDISTANCE, headerCenterY);
+                        ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                        ObjectSetText(objName, "C2", DashboardFontSize, DashboardFont, HeaderTextColor);
+                    }
+                }
+            }
         }
     }
 
@@ -540,7 +674,7 @@ void CreateDashboard()
         for(int dataCol = 0; dataCol < totalColumns; dataCol++)
         {
             int dataCellWidth = columnWidths[dataCol];
-            int dataCellHeight = rowHeight;
+            int dataCellHeight = RowHeight;
             string dataCellBg = DashboardPrefix + "Cell_" + (string)rowIndex + "_" + (string)dataCol + "_Bg";
             ObjectCreate(dataCellBg, OBJ_RECTANGLE_LABEL, 0, 0, 0);
             ObjectSet(dataCellBg, OBJPROP_BACK, false);
@@ -556,48 +690,101 @@ void CreateDashboard()
             ObjectSet(dataCellBg, OBJPROP_SELECTABLE, false);
             ObjectSet(dataCellBg, OBJPROP_HIDDEN, true);
 
-            int centerX = columnLeft[dataCol] + dataCellWidth / 2;
-            int centerY = rowY + (dataCellHeight / 2);
+            // Calculate center position exactly like TurtleSoup: X + W/2
+            int cellX = columnLeft[dataCol];
+            int centerX = cellX + dataCellWidth / 2 + (dataCol > 0 ? CenterOffset : 0); // Apply offset only to centered columns (not pair column)
+            int centerY = rowY + dataCellHeight / 2;
             if(dataCol == 0)
             {
                 objName = DashboardPrefix + "Pair_" + (string)rowIndex + "_Name";
                 ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
                 ObjectSet(objName, OBJPROP_BACK, false);
-                ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[dataCol] + 12);
+                ObjectSet(objName, OBJPROP_XDISTANCE, columnLeft[dataCol] + 6);
                 ObjectSet(objName, OBJPROP_YDISTANCE, centerY);
                 ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_LEFT);
                 ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
                 ObjectSetText(objName, Pairs[rowIndex], DashboardFontSize, DashboardFont, TableTextColor);
             }
-            else if(dataCol % 2 == 1)
-            {
-                int tfIdxData1 = (dataCol - 1) / 2;
-                objName = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)tfIdxData1;
-                ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
-                ObjectSet(objName, OBJPROP_BACK, false);
-                ObjectSet(objName, OBJPROP_XDISTANCE, centerX);
-                ObjectSet(objName, OBJPROP_YDISTANCE, centerY);
-                ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
-                ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-                ObjectSetText(objName, CharToString(232), DashboardFontSize + 2, "Wingdings", NeutralColor);
-                ObjectSet(objName, OBJPROP_SELECTABLE, true);
-                ObjectSet(objName, OBJPROP_SELECTED, false);
-            }
             else
             {
-                int tfIdxData2 = (dataCol - 2) / 2;
-                string ageName = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)tfIdxData2 + "_Age";
-                ObjectCreate(ageName, OBJ_LABEL, 0, 0, 0);
-                ObjectSet(ageName, OBJPROP_BACK, false);
-                ObjectSet(ageName, OBJPROP_XDISTANCE, centerX);
-                ObjectSet(ageName, OBJPROP_YDISTANCE, centerY);
-                ObjectSet(ageName, OBJPROP_ANCHOR, ANCHOR_CENTER);
-                ObjectSet(ageName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
-                ObjectSet(ageName, OBJPROP_SELECTABLE, false);
-                ObjectSetText(ageName, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                // Calculate which timeframe and column type this is
+                int dataColOffset = dataCol - 1; // Skip pair column
+                int dataTfIdx = 0;
+                int dataColInTF = 0;
+                int dataColsPerTF = 1; // Arrow
+                if(ShowAgeColumn) dataColsPerTF++;
+                if(ShowValueColumns) dataColsPerTF += 2;
+                
+                dataTfIdx = dataColOffset / dataColsPerTF;
+                dataColInTF = dataColOffset % dataColsPerTF;
+                
+                if(dataTfIdx < NumTimeframes)
+                {
+                    if(dataColInTF == 0)
+                    {
+                        // Arrow column
+                        objName = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)dataTfIdx;
+                        ObjectCreate(objName, OBJ_LABEL, 0, 0, 0);
+                        ObjectSet(objName, OBJPROP_BACK, false);
+                        ObjectSet(objName, OBJPROP_XDISTANCE, centerX);
+                        ObjectSet(objName, OBJPROP_YDISTANCE, centerY);
+                        ObjectSet(objName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                        ObjectSet(objName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                        ObjectSetText(objName, CharToString(232), DashboardFontSize + 2, "Wingdings", NeutralColor);
+                        ObjectSet(objName, OBJPROP_SELECTABLE, true);
+                        ObjectSet(objName, OBJPROP_SELECTED, false);
+                    }
+                    else if(dataColInTF == 1 && ShowAgeColumn)
+                    {
+                        // Age column
+                        string ageName = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)dataTfIdx + "_Age";
+                        ObjectCreate(ageName, OBJ_LABEL, 0, 0, 0);
+                        ObjectSet(ageName, OBJPROP_BACK, false);
+                        ObjectSet(ageName, OBJPROP_XDISTANCE, centerX);
+                        ObjectSet(ageName, OBJPROP_YDISTANCE, centerY);
+                        ObjectSet(ageName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                        ObjectSet(ageName, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                        ObjectSet(ageName, OBJPROP_SELECTABLE, false);
+                        ObjectSetText(ageName, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                    }
+                    else if(ShowValueColumns)
+                    {
+                        // Value columns
+                        int dataValueColIdx = dataColInTF;
+                        if(ShowAgeColumn) dataValueColIdx--; // Adjust for age column
+                        dataValueColIdx -= 1; // Adjust for arrow column
+                        
+                        if(dataValueColIdx == 0)
+                        {
+                            // Currency 1 value column
+                            string val1Name = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)dataTfIdx + "_Val1";
+                            ObjectCreate(val1Name, OBJ_LABEL, 0, 0, 0);
+                            ObjectSet(val1Name, OBJPROP_BACK, false);
+                            ObjectSet(val1Name, OBJPROP_XDISTANCE, centerX);
+                            ObjectSet(val1Name, OBJPROP_YDISTANCE, centerY);
+                            ObjectSet(val1Name, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                            ObjectSet(val1Name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                            ObjectSet(val1Name, OBJPROP_SELECTABLE, false);
+                            ObjectSetText(val1Name, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                        }
+                        else if(dataValueColIdx == 1)
+                        {
+                            // Currency 2 value column
+                            string val2Name = DashboardPrefix + "Pair_" + (string)rowIndex + "_TF" + (string)dataTfIdx + "_Val2";
+                            ObjectCreate(val2Name, OBJ_LABEL, 0, 0, 0);
+                            ObjectSet(val2Name, OBJPROP_BACK, false);
+                            ObjectSet(val2Name, OBJPROP_XDISTANCE, centerX);
+                            ObjectSet(val2Name, OBJPROP_YDISTANCE, centerY);
+                            ObjectSet(val2Name, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                            ObjectSet(val2Name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+                            ObjectSet(val2Name, OBJPROP_SELECTABLE, false);
+                            ObjectSetText(val2Name, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                        }
+                    }
+                }
             }
         }
-        rowY += rowHeight - 1; // Border overlap like TurtleSoup
+        rowY += RowHeight - 1; // Border overlap like TurtleSoup
     }
 }
 
@@ -614,15 +801,40 @@ void UpdateDashboard()
     // Update each pair's signals
     for(int i = 0; i < TotalPairs; i++)
     {
+        bool newBarTF1 = false;
+        bool newBarTF2 = false;
+        int signalTF1 = 0;
+        int signalTF2 = 0;
+        
         // Update each timeframe
         for(int tf = 0; tf < NumTimeframes; tf++)
         {
             // Get current signal
             currentSignal = GetCrossoverSignal(Pairs[i], Timeframes[tf]);
+            
+            // Get strength difference for color coding
+            double strengthDiff = GetStrengthDifference(Pairs[i], Timeframes[tf]);
 
-            // Check for direction change and alert if enabled
+            // Get signal index for this pair/timeframe
             int signalIndex = GetPreviousSignalIndex(i, tf);
-            if(AlertEnabled[tf] && PreviousSignals[signalIndex] != 0 && PreviousSignals[signalIndex] != currentSignal)
+            
+            // Check if a new bar has formed (candle close)
+            bool newBar = IsNewBar(Pairs[i], Timeframes[tf], signalIndex);
+            
+            // Store new bar status and signals for TF1 and TF2 (for alignment check)
+            if(tf == 0)
+            {
+                newBarTF1 = newBar;
+                signalTF1 = currentSignal;
+            }
+            else if(tf == 1)
+            {
+                newBarTF2 = newBar;
+                signalTF2 = currentSignal;
+            }
+
+            // Check for direction change and alert if enabled (only on candle close)
+            if(newBar && AlertEnabled[tf] && PreviousSignals[signalIndex] != 0 && PreviousSignals[signalIndex] != currentSignal)
             {
                 if(currentSignal == 1 && PreviousSignals[signalIndex] == -1)
                 {
@@ -643,40 +855,280 @@ void UpdateDashboard()
             }
             PreviousSignals[signalIndex] = currentSignal;
 
-            // Determine arrow and color
+            // Determine arrow and color based on signal and strength difference
             if(currentSignal == 1)
             {
                 signalText = CharToString(233); // Up arrow in Wingdings
-                signalColor = UpSignalColor;
+                signalColor = GetSignalColor(currentSignal, strengthDiff);
             }
             else if(currentSignal == -1)
             {
                 signalText = CharToString(234); // Down arrow in Wingdings
-                signalColor = DownSignalColor;
+                signalColor = GetSignalColor(currentSignal, strengthDiff);
             }
             else
             {
                 signalText = CharToString(232); // Right arrow in Wingdings (neutral)
-                signalColor = NeutralColor;
+                signalColor = GetSignalColor(currentSignal, strengthDiff);
             }
 
-            // Update display
+            // Update display - recalculate centerY and centerX to ensure consistent alignment
+            int headerY = DashboardY + 40;
+            int dataStartY = headerY + HeaderHeight - 1;
+            int centerY = dataStartY + i * (RowHeight - 1) + RowHeight / 2;
+            
+            // Calculate arrow column position (matching CreateDashboard logic)
+            int pairColWidth;
+            if(PairColumnWidth > 0)
+            {
+                pairColWidth = PairColumnWidth;
+            }
+            else
+            {
+                pairColWidth = 60;
+                for(int p = 0; p < TotalPairs; p++)
+                {
+                    int nameWidth = StringLen(Pairs[p]) * 8 + 12;
+                    if(nameWidth > pairColWidth) pairColWidth = nameWidth;
+                }
+                int pairHeaderWidth = StringLen("PAIR") * 8 + 12;
+                if(pairHeaderWidth > pairColWidth) pairColWidth = pairHeaderWidth;
+            }
+            
+            // Calculate arrow column left position
+            int arrowColLeft = DashboardX + pairColWidth - 1; // Start after pair column with border overlap
+            for(int t = 0; t < tf; t++)
+            {
+                arrowColLeft += ArrowColumnWidth - 1; // Add arrow column width with border overlap
+                if(ShowAgeColumn) arrowColLeft += AgeColumnWidth - 1; // Add age column width with border overlap
+                if(ShowValueColumns) arrowColLeft += (ValueColumnWidth - 1) * 2; // Add two value column widths with border overlap
+            }
+            int arrowCenterX = arrowColLeft + ArrowColumnWidth / 2 + CenterOffset;
+            
             objName = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf;
+            ObjectSet(objName, OBJPROP_XDISTANCE, arrowCenterX);
+            ObjectSet(objName, OBJPROP_YDISTANCE, centerY);
 			ObjectSetText(objName, signalText, DashboardFontSize + 2, "Wingdings", signalColor);
-            // Update the age label for this timeframe
-            string objNameAge = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf + "_Age";
-            string ageText = "";
-            if(currentSignal != 0 && PreviousSignalTime[signalIndex] > 0)
+            // Update the age label for this timeframe (only if ShowAgeColumn is enabled)
+            int currentColLeft = arrowColLeft + ArrowColumnWidth - 1;
+            if(ShowAgeColumn)
             {
-                ageText = FormatSignalAge(PreviousSignalTime[signalIndex]);
+                int ageColLeft = currentColLeft;
+                int ageCenterX = ageColLeft + AgeColumnWidth / 2 + CenterOffset;
+                string objNameAge = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf + "_Age";
+                ObjectSet(objNameAge, OBJPROP_XDISTANCE, ageCenterX);
+                ObjectSet(objNameAge, OBJPROP_YDISTANCE, centerY);
+                string ageText = "";
+                if(currentSignal != 0 && PreviousSignalTime[signalIndex] > 0)
+                {
+                    ageText = FormatSignalAge(PreviousSignalTime[signalIndex]);
+                }
+                else if(currentSignal != 0 && PreviousSignalTime[signalIndex] == 0)
+                {
+                    // If we have a non-zero signal but no recorded time, use a placeholder
+                    ageText = "<1m";
+                }
+                ObjectSetText(objNameAge, ageText, MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                currentColLeft += AgeColumnWidth - 1; // Move to next column
             }
-            else if(currentSignal != 0 && PreviousSignalTime[signalIndex] == 0)
+            
+            // Update the currency value labels for this timeframe (only if ShowValueColumns is enabled)
+            if(ShowValueColumns)
             {
-                // If we have a non-zero signal but no recorded time, use a placeholder
-                ageText = "<1m";
+                string objNameVal1 = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf + "_Val1";
+                string objNameVal2 = DashboardPrefix + "Pair_" + i + "_TF" + (string)tf + "_Val2";
+                double value1, value2;
+                if(GetCurrencyValues(Pairs[i], Timeframes[tf], value1, value2))
+                {
+                    // Parse pair name to get currency names
+                    string currency1, currency2;
+                    ParsePairName(Pairs[i], currency1, currency2);
+                    
+                    // Currency 1 value column
+                    int val1ColLeft = currentColLeft;
+                    int val1CenterX = val1ColLeft + ValueColumnWidth / 2 + CenterOffset;
+                    ObjectSet(objNameVal1, OBJPROP_XDISTANCE, val1CenterX);
+                    ObjectSet(objNameVal1, OBJPROP_YDISTANCE, centerY);
+                    ObjectSet(objNameVal1, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                    string val1Text = currency1 + "=" + DoubleToString(value1, 2);
+                    ObjectSetText(objNameVal1, val1Text, MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                    
+                    // Currency 2 value column
+                    int val2ColLeft = val1ColLeft + ValueColumnWidth - 1;
+                    int val2CenterX = val2ColLeft + ValueColumnWidth / 2 + CenterOffset;
+                    ObjectSet(objNameVal2, OBJPROP_XDISTANCE, val2CenterX);
+                    ObjectSet(objNameVal2, OBJPROP_YDISTANCE, centerY);
+                    ObjectSet(objNameVal2, OBJPROP_ANCHOR, ANCHOR_CENTER);
+                    string val2Text = currency2 + "=" + DoubleToString(value2, 2);
+                    ObjectSetText(objNameVal2, val2Text, MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                }
+                else
+                {
+                    // No values available - clear the labels
+                    ObjectSetText(objNameVal1, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                    ObjectSetText(objNameVal2, "", MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
+                }
             }
-            ObjectSetText(objNameAge, ageText, MathMax(8, DashboardFontSize - 1), DashboardFont, TableTextColor);
         }
+
+        // Check for TF1+TF2 alignment alert (only on candle close)
+        if(AlertTF1TF2Alignment && NumTimeframes >= 2)
+        {
+            // Only check alignment on candle close (when either TF1 or TF2 has a new bar)
+            if(newBarTF1 || newBarTF2)
+            {
+                // Check if TF1 and TF2 are aligned (both UP or both DOWN, and not neutral)
+                bool isAligned = (signalTF1 == 1 && signalTF2 == 1) || (signalTF1 == -1 && signalTF2 == -1);
+
+                // Alert when alignment occurs (transition from not aligned to aligned)
+                if(isAligned && !PreviousTF1TF2Alignment[i])
+                {
+                    string direction = (signalTF1 == 1) ? "UP" : "DOWN";
+                    Alarm("TF1+TF2 Alignment: " + Pairs[i] + " - " + GetTimeframeString(Timeframes[0]) + 
+                          " and " + GetTimeframeString(Timeframes[1]) + " both aligned " + direction);
+                }
+
+                // Update previous alignment state
+                PreviousTF1TF2Alignment[i] = isAligned;
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get Currency Strength Values for Specified Symbol and Timeframe |
+//+------------------------------------------------------------------+
+bool GetCurrencyValues(string symbol, ENUM_TIMEFRAMES timeframe, double &value1, double &value2)
+{
+    string indicatorPath;
+    
+    // First try standard location
+    indicatorPath = IndicatorName;
+    value1 = iCustom(symbol, timeframe, indicatorPath, Line1Buffer, 0);
+    value2 = iCustom(symbol, timeframe, indicatorPath, Line2Buffer, 0);
+
+    // If not found (all values are EMPTY_VALUE), try subfolder
+    if(value1 == EMPTY_VALUE && value2 == EMPTY_VALUE)
+    {
+        indicatorPath = "Millionaire Maker\\" + IndicatorName;
+        value1 = iCustom(symbol, timeframe, indicatorPath, Line1Buffer, 0);
+        value2 = iCustom(symbol, timeframe, indicatorPath, Line2Buffer, 0);
+    }
+
+    // If still not found, return false
+    if(value1 == EMPTY_VALUE || value2 == EMPTY_VALUE)
+    {
+        return false;
+    }
+
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Parse Pair Name to Extract Two Currencies                        |
+//+------------------------------------------------------------------+
+void ParsePairName(string pair, string &currency1, string &currency2)
+{
+    // For standard pairs like EURUSD, GBPUSD, USDJPY (6 characters)
+    if(StringLen(pair) == 6)
+    {
+        currency1 = StringSubstr(pair, 0, 3);
+        currency2 = StringSubstr(pair, 3, 3);
+    }
+    // For pairs with 7 characters (rare, but possible)
+    else if(StringLen(pair) == 7)
+    {
+        // Try to find common 3-letter currencies
+        string commonCurrencies[] = {"USD", "EUR", "GBP", "JPY", "AUD", "CAD", "CHF", "NZD", "XAU", "XAG"};
+        bool found = false;
+        for(int i = 0; i < ArraySize(commonCurrencies); i++)
+        {
+            int pos = StringFind(pair, commonCurrencies[i]);
+            if(pos == 0)
+            {
+                currency1 = commonCurrencies[i];
+                currency2 = StringSubstr(pair, StringLen(commonCurrencies[i]));
+                found = true;
+                break;
+            }
+            else if(pos > 0 && pos + StringLen(commonCurrencies[i]) == StringLen(pair))
+            {
+                currency1 = StringSubstr(pair, 0, pos);
+                currency2 = commonCurrencies[i];
+                found = true;
+                break;
+            }
+        }
+        if(!found)
+        {
+            // Default: first 3 and last 3
+            currency1 = StringSubstr(pair, 0, 3);
+            currency2 = StringSubstr(pair, 4, 3);
+        }
+    }
+    else
+    {
+        // Default: first 3 and last 3
+        currency1 = StringSubstr(pair, 0, 3);
+        currency2 = StringSubstr(pair, StringLen(pair) - 3, 3);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get Strength Difference for Specified Symbol and Timeframe      |
+//+------------------------------------------------------------------+
+double GetStrengthDifference(string symbol, ENUM_TIMEFRAMES timeframe)
+{
+    double value1, value2;
+    if(GetCurrencyValues(symbol, timeframe, value1, value2))
+    {
+        return MathAbs(value1 - value2);
+    }
+    return 0.0;
+}
+
+//+------------------------------------------------------------------+
+//| Get Color Based on Signal Direction and Strength Difference     |
+//+------------------------------------------------------------------+
+color GetSignalColor(int signal, double strengthDiff)
+{
+    // If strength coloring is disabled, use legacy colors
+    if(!UseStrengthColoring)
+    {
+        if(signal == 1)
+            return UpSignalColor;
+        else if(signal == -1)
+            return DownSignalColor;
+        else
+            return NeutralColor;
+    }
+
+    // For neutral signals, always use neutral color
+    if(signal == 0)
+        return NeutralColor;
+
+    // Determine color based on signal direction and strength difference
+    if(signal == 1) // Up signal
+    {
+        if(strengthDiff >= StrengthHighThreshold)
+            return UpHighColor;
+        else if(strengthDiff >= StrengthMediumThreshold)
+            return UpMediumColor;
+        else if(strengthDiff >= 0.01)
+            return UpLowColor;
+        else
+            return UpLowColor; // Very small difference, use low color
+    }
+    else // Down signal (signal == -1)
+    {
+        if(strengthDiff >= StrengthHighThreshold)
+            return DownHighColor;
+        else if(strengthDiff >= StrengthMediumThreshold)
+            return DownMediumColor;
+        else if(strengthDiff >= 0.01)
+            return DownLowColor;
+        else
+            return DownLowColor; // Very small difference, use low color
     }
 }
 

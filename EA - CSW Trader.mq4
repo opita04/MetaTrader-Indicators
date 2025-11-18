@@ -9,7 +9,8 @@ Version: 1.01
 Last Modified: 2025.11.11 - Initial creation integrating ArrowsSimple logic
 Compatibility: MetaTrader 4 (MT4)
 */
-#property copyright "Currency Strength Arrow Trader"
+//+------------------------------------------------------------------+
+#property copyright "CSW Trader"
 #property version   "1.01"
 #property strict
 
@@ -24,12 +25,13 @@ extern int    TakeProfitPips        = 200;
 extern int    MaxOpenPositions      = 1;
 extern int    MagicNumber           = 45678;
 extern int    Slippage              = 3;
+extern bool   CloseOppositeOnEntry  = true;
 
 //--- Breakeven settings
 extern bool   UseBreakeven          = false;
 extern int    BreakevenBufferPips   = 1;
 
-//--- Arrow logic (ported from ArrowsSimple.mq4)
+//--- Arrow logic
 extern string __ArrowSettings       = "";
 extern int    Line1Buffer           = 0;
 extern int    Line2Buffer           = 1;
@@ -65,7 +67,7 @@ extern bool   pushAlert             = false;
 extern bool   emailAlert            = false;
 
 //--- Internal state
-string BotName = "Arrow Trader";
+string BotName = "CSW Trader";
 
 string IndicatorPrimaryPath;
 string IndicatorFallbackPath;
@@ -668,8 +670,29 @@ void OnTick()
 
         if(entrySignal != 0 && IsWithinTradingHours())
         {
-            if(entrySignal == 1) PlaceOrder(OP_BUY);
-            else if(entrySignal == -1) PlaceOrder(OP_SELL);
+            if(CloseOppositeOnEntry)
+            {
+                if(entrySignal == 1)
+                {
+                    CloseTrades(OP_SELL);
+                    Print("[EntryCheck] Closed opposite SELL trades before opening BUY");
+                }
+                else if(entrySignal == -1)
+                {
+                    CloseTrades(OP_BUY);
+                    Print("[EntryCheck] Closed opposite BUY trades before opening SELL");
+                }
+            }
+            
+            // Always place new order after closing opposite trades (if enabled)
+            if(entrySignal == 1)
+            {
+                PlaceOrder(OP_BUY);
+            }
+            else if(entrySignal == -1)
+            {
+                PlaceOrder(OP_SELL);
+            }
         }
         else if(entrySignal != 0)
         {
