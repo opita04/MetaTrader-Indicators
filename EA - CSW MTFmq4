@@ -10,7 +10,7 @@ Last Modified: 2025.11.06
 Compatibility: MetaTrader 4 (MT4)
 */
 //+------------------------------------------------------------------+
-#property copyright "Currency Strength Trader"
+#property copyright "CSW MTF Trader"
 #property version   "1.00"
 #property strict
 
@@ -21,6 +21,7 @@ extern int StopLoss = 50;                        // Stop Loss in Pips
 extern int TakeProfit = 100;                     // Take Profit in Pips
 extern int MagicNumber = 12345;                  // Magic Number for Orders
 extern int MaxOpenPositions = 1;                 // Maximum Open Positions
+extern bool CloseOnOppositeArrow = true;        // Close positions when opposite arrow appears
 
 //--- Time Restrictions (uses BROKER TIME, not PC time)
 extern string __TimeRestrictions = ""; // === TIME RESTRICTIONS ===
@@ -63,7 +64,7 @@ extern bool   pushAlert = false;          // Send push notifications
 extern bool   emailAlert = false;         // Send email alerts
 
 //--- Global Variables
-string BotName = "Currency Strength Trader";
+string BotName = "CSW MTF Trader";
 ENUM_TIMEFRAMES Timeframes[4]; // Array of alignment timeframes
 int PreviousSignals[]; // Previous signals for each timeframe [timeframe_index]
 int CurrentAlignmentDirection = 0; // Current alignment direction (0=unaligned, 1=up, -1=down)
@@ -144,6 +145,7 @@ int OnInit()
     Print("Trading pair: ", Symbol());
     Print("Number of alignment timeframes: ", NumTimeframes);
     Print("Opita04 trigger: ", UseOpita04Trigger ? "ENABLED" : "DISABLED");
+    Print("Close on opposite arrow: ", CloseOnOppositeArrow ? "ENABLED" : "DISABLED");
     Print("Using BROKER TIME for all time-based operations (not PC/local time)");
 
     IsInitialized = true;
@@ -179,6 +181,13 @@ void OnTick()
     // Only trade if we have a new bar on the trigger timeframe
     if(Time[0] == lastTradeTime) return;
     lastTradeTime = Time[0];
+
+    // Check for opposite arrow signals to close positions
+    // This will also open a new position immediately if alignment matches
+    if(CloseOnOppositeArrow)
+    {
+        CloseOppositePositions(currentSymbol);
+    }
 
     // Check for trading opportunities
     CheckForTradeSignal(currentSymbol);
@@ -461,6 +470,146 @@ bool CanOpenPosition(string symbol)
     }
 
     return (openPositions < MaxOpenPositions);
+}
+
+//+------------------------------------------------------------------+
+//| Close positions when opposite arrow signal appears               |
+//| Returns true if a position was closed, false otherwise            |
+//+------------------------------------------------------------------+
+bool CloseOppositePositions(string symbol)
+{
+    if(!UseOpita04Trigger) return false; // Only works with opita trigger enabled
+
+    int opitaSignal = GetOpita04Signal();
+    if(opitaSignal == 0) return false; // No signal, nothing to do
+
+    bool positionClosed = false;
+    int closedOrderType = -1;
+
+    // Check all open positions for this symbol and magic number
+    for(int i = OrdersTotal() - 1; i >= 0; i--)
+    {
+        if(OrderSelect(i, SELECT_BY_POS, MODE_TRADES))
+        {
+            if(OrderSymbol() == symbol && OrderMagicNumber() == MagicNumber)
+            {
+                int orderType = OrderType();
+                bool shouldClose = false;
+                string reason = "";
+
+                // Check if opita signal is opposite to position direction
+                if(orderType == OP_BUY && opitaSignal == -1)
+                {
+                    shouldClose = true;
+                    reason = "Opposite SELL arrow signal";
+                    closedOrderType = OP_BUY;
+                }
+                else if(orderType == OP_SELL && opitaSignal == 1)
+                {
+                    shouldClose = true;
+                    reason = "Opposite BUY arrow signal";
+                    closedOrderType = OP_SELL;
+                }
+
+                if(shouldClose)
+                {
+                    int ticket = OrderTicket();
+                    bool closed = OrderClose(ticket, OrderLots(), 
+                                            (orderType == OP_BUY) ? Bid : Ask, 3, clrRed);
+
+                    if(closed)
+                    {
+                        positionClosed = true;
+                        string direction = (orderType == OP_BUY) ? "BUY" : "SELL";
+                        string message = StringFormat("POSITION CLOSED: %s %s ticket %d - %s",
+                                                     symbol, direction, ticket, reason);
+                        Print(message);
+
+                        if(AlertOnTrade)
+                        {
+                            Alarm(message);
+                        }
+
+                        // Reset trade flag if we closed a position
+                        HasTradedInAlignment = false;
+                    }
+                    else
+                    {
+                        int error = GetLastError();
+                        Print("Failed to close position ", ticket, ". Error: ", error);
+                    }
+                }
+            }
+        }
+    }
+
+    // If we closed a position due to opposite arrow, try to open new position immediately
+    if(positionClosed && opitaSignal != 0)
+    {
+        // Get current alignment to check if we should open
+        int currentSignals[4];
+        ArrayInitialize(currentSignals, 0);
+        bool signalsValid = true;
+
+        for(int tf = 0; tf < NumTimeframes; tf++)
+        {
+            currentSignals[tf] = GetCrossoverSignal(symbol, Timeframes[tf]);
+            if(currentSignals[tf] == 0)
+            {
+                signalsValid = false;
+                break;
+            }
+        }
+
+        // Determine current alignment direction
+        int currentAlignment = 0;
+        if(signalsValid)
+        {
+            bool allAligned = true;
+            int alignmentDirection = currentSignals[0];
+
+            for(int tf = 1; tf < NumTimeframes; tf++)
+            {
+                if(currentSignals[tf] != alignmentDirection)
+                {
+                    allAligned = false;
+                    break;
+                }
+            }
+
+            if(allAligned)
+            {
+                currentAlignment = alignmentDirection;
+            }
+        }
+
+        // If alignment matches the opposite arrow direction, open immediately
+        if(currentAlignment == opitaSignal)
+        {
+            PrintFormat("Alignment matches opposite arrow direction (%d), opening new position immediately", opitaSignal);
+            
+            if(CanOpenPosition(symbol))
+            {
+                int orderType = (opitaSignal == 1) ? OP_BUY : OP_SELL;
+                OpenPosition(symbol, orderType);
+                HasTradedInAlignment = true;
+                
+                string direction = (opitaSignal == 1) ? "BUY" : "SELL";
+                Print("NEW POSITION OPENED IMMEDIATELY: ", direction, " after closing opposite position");
+            }
+            else
+            {
+                Print("Cannot open new position - max positions reached or other restriction");
+            }
+        }
+        else
+        {
+            PrintFormat("Alignment (%d) does not match opposite arrow direction (%d), waiting for alignment", 
+                       currentAlignment, opitaSignal);
+        }
+    }
+
+    return positionClosed;
 }
 
 //+------------------------------------------------------------------+

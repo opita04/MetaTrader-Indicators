@@ -64,6 +64,7 @@ extern ENUM_TIMEFRAMES Timeframe2 = PERIOD_M5;  // Timeframe 2
 extern ENUM_TIMEFRAMES Timeframe1 = PERIOD_M1;   // Timeframe 1
 
 extern int    BarsToLookBack = 1000;         // Bars to Look Back for Data
+extern bool   EnableDebugLogs = false;       // Enable verbose debugging logs
 
 //--- State Machine Parameters (internal)
 int    VolumeBuffer1 = 2;            // Volume/Strength Buffer 1 (green/positive)
@@ -131,6 +132,15 @@ extern bool   ShowVerticalLines = true;     // Show vertical lines at confirmed 
 extern int    VerticalLineStyle = STYLE_SOLID; // Style for vertical lines
 extern int    VerticalLineWidth = 3;        // Width for vertical lines
 
+//--- ==================== ALERT SETTINGS ====================
+extern string s6 = "===== Alert Settings ====="; // ────────────────────
+extern bool   EnableTF1Alerts = true;       // Enable TF1 Alerts
+extern bool   EnableTF2Alerts = true;       // Enable TF2 Alerts
+extern bool   AlertPopup = true;            // Show Popup Alerts
+extern bool   AlertPush = true;             // Send Push Notifications
+extern bool   AlertSound = true;           // Play Sound Alerts
+extern string SoundFile = "alert.wav";      // Sound File Name (must be in Sounds folder)
+
 //--- Indicator Buffers (4 per timeframe: Up, Down, NeutralBull, NeutralBear)
 double TF1UpBuffer[];
 double TF1DownBuffer[];
@@ -157,6 +167,17 @@ int TF4State[];
 
 //--- Global Variables
 ENUM_TIMEFRAMES Timeframes[4];
+
+//--- Alert tracking variables
+static int prevTF1State = 0;
+static int prevTF2State = 0;
+
+//--- Debug helper
+void DebugPrint(string message)
+{
+    if(!EnableDebugLogs) return;
+    Print("CSHistSM DEBUG: " + message);
+}
 
 //+------------------------------------------------------------------+
 //| Custom indicator initialization function                         |
@@ -558,14 +579,8 @@ int start()
     // Create vertical lines at confirmed zone starts (state 3 or -3)
     if(ShowVerticalLines && NumTimeframes >= 1)
     {
-        // Remove existing VLine objects
-        for(int objIdx2 = ObjectsTotal() - 1; objIdx2 >= 0; objIdx2--)
-        {
-            string objName2 = ObjectName(objIdx2);
-            if(StringFind(objName2, "VLine_SM_") == 0)
-                ObjectDelete(objName2);
-        }
-
+        // Historical VLine deletion removed to prevent repainting
+        
         DrawTimeframeVerticalLines(0, "VLine_SM_TF1_", VerticalLineStyle, VerticalLineWidth, TF1UpColor, TF1DownColor, totalBars);
 
         if(NumTimeframes >= 2)
@@ -578,11 +593,95 @@ int start()
         {
             string objName = ObjectName(objIdx);
             if(StringFind(objName, "VLine_SM_") == 0)
-                ObjectDelete(objName);
+            {
+                bool deleted = ObjectDelete(objName);
+                if(deleted) DebugPrint("Deleted VLine object (ShowVerticalLines disabled): " + objName);
+            }
         }
     }
 
-    // Draw arrows for confirmed zone starts per timeframe
+    // Check for alerts on the most recent bar (bar 0) - only on new bars
+    // Draw visual elements on bar 0 when alerts are triggered
+    if(isNewBar)
+    {
+        // Check TF1 alerts
+        if(EnableTF1Alerts && NumTimeframes >= 1)
+        {
+            int currentTF1State = GetStateArray(0, 0);
+            if((currentTF1State == 3 || currentTF1State == -3) && currentTF1State != prevTF1State)
+            {
+                SendAlert(0, currentTF1State);
+                // Remove any visual elements on bar 1 (the bar that just closed) to avoid duplicates - REMOVED to prevent repainting
+                /*
+                if(Bars > 1)
+                {
+                    string vnameOld = "VLine_SM_TF1_" + IntegerToString((int)Time[1]);
+                    if(ObjectDelete(vnameOld)) DebugPrint("Deleted previous TF1 VLine during alert: " + vnameOld);
+                    string arrowNameOld = "Arrow_TF1_" + IntegerToString((int)Time[1]);
+                    if(ObjectDelete(arrowNameOld)) DebugPrint("Deleted previous TF1 Arrow during alert: " + arrowNameOld);
+                }
+                */
+                DebugPrint("TF1 alert triggered. State=" + IntegerToString(currentTF1State) + " Time=" + TimeToString(Time[0], TIME_DATE|TIME_MINUTES|TIME_SECONDS));
+                // Draw visual elements on bar 0 when alert is triggered
+                if(ShowVerticalLines)
+                {
+                    string vname = "VLine_SM_TF1_" + IntegerToString((int)Time[0]);
+                    color vcol = (currentTF1State == 3) ? TF1UpColor : TF1DownColor;
+                    DrawVerticalLine(vname, Time[0], vcol, VerticalLineStyle, VerticalLineWidth);
+                }
+                if(ShowTF1Arrows)
+                {
+                    double gap = getArrowPoint() * ArrowGapMultiplier;
+                    string arrowName = "Arrow_TF1_" + IntegerToString((int)Time[0]);
+                    int arrowCode = (currentTF1State == 3) ? TF1ArrowCodeUp : TF1ArrowCodeDown;
+                    color arrowColor = (currentTF1State == 3) ? TF1UpColor : TF1DownColor;
+                    double arrowPrice = (currentTF1State == 3) ? (Low[0] - gap) : (High[0] + gap);
+                    DrawArrow(arrowName, Time[0], arrowPrice, arrowCode, arrowColor, TF1ArrowSize);
+                }
+            }
+            prevTF1State = currentTF1State;
+        }
+        
+        // Check TF2 alerts
+        if(EnableTF2Alerts && NumTimeframes >= 2)
+        {
+            int currentTF2State = GetStateArray(1, 0);
+            if((currentTF2State == 3 || currentTF2State == -3) && currentTF2State != prevTF2State)
+            {
+                SendAlert(1, currentTF2State);
+                // Remove any visual elements on bar 1 (the bar that just closed) to avoid duplicates - REMOVED to prevent repainting
+                /*
+                if(Bars > 1)
+                {
+                    string vnameOld = "VLine_SM_TF2_" + IntegerToString((int)Time[1]);
+                    if(ObjectDelete(vnameOld)) DebugPrint("Deleted previous TF2 VLine during alert: " + vnameOld);
+                    string arrowNameOld = "Arrow_TF2_" + IntegerToString((int)Time[1]);
+                    if(ObjectDelete(arrowNameOld)) DebugPrint("Deleted previous TF2 Arrow during alert: " + arrowNameOld);
+                }
+                */
+                DebugPrint("TF2 alert triggered. State=" + IntegerToString(currentTF2State) + " Time=" + TimeToString(Time[0], TIME_DATE|TIME_MINUTES|TIME_SECONDS));
+                // Draw visual elements on bar 0 when alert is triggered
+                if(ShowVerticalLines)
+                {
+                    string vname = "VLine_SM_TF2_" + IntegerToString((int)Time[0]);
+                    color vcol = (currentTF2State == 3) ? TF2UpColor : TF2DownColor;
+                    DrawVerticalLine(vname, Time[0], vcol, STYLE_DASH, VerticalLineWidth);
+                }
+                if(ShowTF2Arrows)
+                {
+                    double gap = getArrowPoint() * ArrowGapMultiplier;
+                    string arrowName = "Arrow_TF2_" + IntegerToString((int)Time[0]);
+                    int arrowCode = (currentTF2State == 3) ? TF2ArrowCodeUp : TF2ArrowCodeDown;
+                    color arrowColor = (currentTF2State == 3) ? TF2UpColor : TF2DownColor;
+                    double arrowPrice = (currentTF2State == 3) ? (Low[0] - gap) : (High[0] + gap);
+                    DrawArrow(arrowName, Time[0], arrowPrice, arrowCode, arrowColor, TF2ArrowSize);
+                }
+            }
+            prevTF2State = currentTF2State;
+        }
+    }
+
+    // Draw arrows for confirmed zone starts per timeframe (historical bars only, skip bar 0 if alert was just triggered)
     DrawTimeframeArrows(0, TF1State, ShowTF1Arrows, TF1ArrowCodeUp, TF1ArrowCodeDown, TF1ArrowSize, TF1UpColor, TF1DownColor, totalBars);
     DrawTimeframeArrows(1, TF2State, ShowTF2Arrows, TF2ArrowCodeUp, TF2ArrowCodeDown, TF2ArrowSize, TF2UpColor, TF2DownColor, totalBars);
     DrawTimeframeArrows(2, TF3State, ShowTF3Arrows, TF3ArrowCodeUp, TF3ArrowCodeDown, TF3ArrowSize, TF3UpColor, TF3DownColor, totalBars);
@@ -857,13 +956,19 @@ void DrawVerticalLine(string name, datetime time, color col, int style, int widt
     if(ObjectFind(name) < 0)
     {
         ObjectCreate(name, OBJ_VLINE, 0, time, 0);
+        ObjectSet(name, OBJPROP_COLOR, col);
+        ObjectSet(name, OBJPROP_STYLE, style);
+        ObjectSet(name, OBJPROP_WIDTH, width);
+        ObjectSet(name, OBJPROP_BACK, true);
+        DebugPrint(StringFormat("DrawVerticalLine -> name=%s time=%s color=%d style=%d width=%d", name, TimeToString(time, TIME_DATE|TIME_MINUTES|TIME_SECONDS), col, style, width));
     }
-    if(ObjectFind(name) >= 0)
+    else if(time == Time[0])
     {
         ObjectSet(name, OBJPROP_COLOR, col);
         ObjectSet(name, OBJPROP_STYLE, style);
         ObjectSet(name, OBJPROP_WIDTH, width);
         ObjectSet(name, OBJPROP_BACK, true);
+        DebugPrint(StringFormat("DrawVerticalLine -> name=%s time=%s color=%d style=%d width=%d", name, TimeToString(time, TIME_DATE|TIME_MINUTES|TIME_SECONDS), col, style, width));
     }
 }
 
@@ -875,7 +980,8 @@ void DrawTimeframeVerticalLines(int tf_idx, string prefix, int lineStyle, int li
 {
     int prevState = 0;
 
-    for(int b = totalBars - 1; b >= 0; b--)
+    // Start from totalBars - 1, skip bar 0 and bar 1 (bar 0 is drawn when alerts fire, bar 1 might be the alert bar)
+    for(int b = totalBars - 1; b > 1; b--)
     {
         int state = GetStateArray(tf_idx, b);
 
@@ -884,6 +990,7 @@ void DrawTimeframeVerticalLines(int tf_idx, string prefix, int lineStyle, int li
             string vname = prefix + IntegerToString((int)Time[b]);
             color vcol = (state == 3) ? upColor : downColor;
             DrawVerticalLine(vname, Time[b], vcol, lineStyle, lineWidth);
+            DebugPrint(StringFormat("DrawTimeframeVerticalLines -> TF%d state=%d bar=%d time=%s", tf_idx+1, state, b, TimeToString(Time[b], TIME_DATE|TIME_MINUTES|TIME_SECONDS)));
         }
 
         if(state != 0)
@@ -919,18 +1026,12 @@ void DrawTimeframeArrows(int tf_idx, int &stateArray[], bool showArrows, int arr
 {
     if(!showArrows || tf_idx >= NumTimeframes) return;
     
-    // Clear existing arrows for this timeframe
-    for(int objIdx = ObjectsTotal() - 1; objIdx >= 0; objIdx--)
-    {
-        string objName = ObjectName(objIdx);
-        if(StringFind(objName, "Arrow_TF" + IntegerToString(tf_idx + 1) + "_") == 0)
-            ObjectDelete(objName);
-    }
+    // Historical arrow deletion removed to prevent repainting
     
     int prevState = 0;
     
-    // Scan from oldest to newest
-    for(int b = totalBars - 1; b >= 0; b--)
+    // Scan from oldest to newest, skip bar 0 and bar 1 (bar 0 is drawn when alerts fire, bar 1 might be the alert bar)
+    for(int b = totalBars - 1; b > 1; b--)
     {
         int state = stateArray[b];
         
@@ -945,6 +1046,7 @@ void DrawTimeframeArrows(int tf_idx, int &stateArray[], bool showArrows, int arr
             double arrowPrice = (state == 3) ? (Low[b] - gap) : (High[b] + gap);
             
             DrawArrow(arrowName, Time[b], arrowPrice, arrowCode, arrowColor, arrowSize);
+            DebugPrint(StringFormat("DrawTimeframeArrows -> TF%d state=%d bar=%d time=%s", tf_idx+1, state, b, TimeToString(Time[b], TIME_DATE|TIME_MINUTES|TIME_SECONDS)));
         }
         
         if(state != 0) prevState = state;
@@ -959,13 +1061,72 @@ void DrawArrow(string name, datetime time, double price, int arrowCode, color co
     if(ObjectFind(name) < 0)
     {
         ObjectCreate(name, OBJ_ARROW, 0, time, price);
+        ObjectSet(name, OBJPROP_ARROWCODE, arrowCode);
+        ObjectSet(name, OBJPROP_COLOR, col);
+        ObjectSet(name, OBJPROP_WIDTH, width);
+        DebugPrint(StringFormat("DrawArrow -> name=%s time=%s price=%G code=%d color=%d width=%d", name, TimeToString(time, TIME_DATE|TIME_MINUTES|TIME_SECONDS), price, arrowCode, col, width));
     }
-    if(ObjectFind(name) >= 0)
+    else if(time == Time[0])
     {
         ObjectSet(name, OBJPROP_ARROWCODE, arrowCode);
         ObjectSet(name, OBJPROP_COLOR, col);
         ObjectSet(name, OBJPROP_WIDTH, width);
         ObjectMove(name, 0, time, price);
+        DebugPrint(StringFormat("DrawArrow -> name=%s time=%s price=%G code=%d color=%d width=%d", name, TimeToString(time, TIME_DATE|TIME_MINUTES|TIME_SECONDS), price, arrowCode, col, width));
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Send alert for confirmed zone start                              |
+//+------------------------------------------------------------------+
+void SendAlert(int tf_idx, int state)
+{
+    if(!AlertPopup && !AlertPush && !AlertSound) return;
+    
+    string tfName = "";
+    string direction = "";
+    
+    if(tf_idx == 0)
+    {
+        tfName = "TF1 (" + GetTimeframeString(Timeframes[0]) + ")";
+    }
+    else if(tf_idx == 1)
+    {
+        tfName = "TF2 (" + GetTimeframeString(Timeframes[1]) + ")";
+    }
+    else
+    {
+        return; // Only TF1 and TF2 supported
+    }
+    
+    if(state == 3)
+    {
+        direction = "UP";
+    }
+    else if(state == -3)
+    {
+        direction = "DOWN";
+    }
+    else
+    {
+        return; // Only alert on confirmed states
+    }
+    
+    string alertMessage = "CSWH " + tfName + " " + Symbol() + " " + direction;
+    
+    if(AlertPopup)
+    {
+        Alert(alertMessage);
+    }
+    
+    if(AlertPush)
+    {
+        SendNotification(alertMessage);
+    }
+    
+    if(AlertSound)
+    {
+        PlaySound(SoundFile);
     }
 }
 
@@ -988,4 +1149,3 @@ double getArrowPoint()
 }
 
 //+------------------------------------------------------------------+
-

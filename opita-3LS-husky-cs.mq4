@@ -138,16 +138,16 @@ enum TIMEFRAMES
 //+------------------------------------------------------------------+
 input settings lss = 0;                                          // ======= 3LS Settings =======
 input TIMEFRAMES ls_tf = 0;                                      // Time frame to use
-input bool ls_show_bearish = true;                               // Show Bearish 3 Line Strike
-input bool ls_show_bullish = true;                               // Show Bullish 3 Line Strike
-input double ls_arrow_gap = 0.25;                                // Arrow gap
-input bool ls_arrow_mtf = true;                                  // Arrow on first mtf bar
-input bool ls_alertsOn = false;                                  // alertsOn
-input bool ls_alerts_current = false;                            // alertsOnCurrent
-input bool ls_alerts_msg = false;                                // alertsMessage
-input bool ls_alerts_snd = false;                                // alertsSound
-input bool ls_alerts_mail = false;                               // alertsEmail
-input bool ls_alerts_noti = false;                               // alertsNotify
+bool ls_show_bearish = true;                               // Show Bearish 3 Line Strike
+bool ls_show_bullish = true;                               // Show Bullish 3 Line Strike
+double ls_arrow_gap = 0.25;                                // Arrow gap
+bool ls_arrow_mtf = true;                                  // Arrow on first mtf bar
+bool ls_alertsOn = false;                                  // alertsOn
+bool ls_alerts_current = false;                            // alertsOnCurrent
+bool ls_alerts_msg = false;                                // alertsMessage
+bool ls_alerts_snd = false;                                // alertsSound
+bool ls_alerts_mail = false;                               // alertsEmail
+bool ls_alerts_noti = false;                               // alertsNotify
 
 input bool       cs_filter_enabled      = true;                 // Enable Currency Strength filter
 input string     cs_indicator_name      = "CurrencyStrengthWizard"; // Indicator Name
@@ -157,8 +157,7 @@ input int        cs_line1_buffer        = 0;                     // Line 1 buffe
 input int        cs_line2_buffer        = 1;                     // Line 2 buffer
 input bool       cs_require_cross       = false;                 // Require fresh crossover
 input bool       cs_filter_debug_logs   = false;                 // Debug logging
-input bool       cs_swap_lines          = false;                 // Swap L1/L2 after read (use if buffers are reversed)
-input bool       exit_alerts            = true;                 // Send alert when blocked marker (X) is placed (exit alert)
+
 
 // Second Currency Strength filter (timeframe + colors)
 input bool            cs2_filter_enabled       = false;           // Enable second CS filter
@@ -181,12 +180,17 @@ extern double ATR_Multiplier_Band1 = 1.0;                      // ATR Multiplier
 extern int ls_minBarsBetweenSignals = 1;                       // Minimum bars between same-side signals
 
 input settings ogs = 0;                                          // ======= Combo Indicator Arrow =======
-input double arrow_gap = 1;                                      // Arrow Gap
+input double arrow_gap = 3.0;                                   // Arrow Gap (multiplier of base distance)
 
 input settings als         = 0;                                  // ======= Alerts =======
 input bool     allowAlerts = true;                               // Desktop Alerts
 input bool     allowMobile = true;                               // Mobile Notification
-input bool     allowEmail  = true;                               // Email Notification
+input bool     AlertOnExit = false;                              // Alert on Exit Signals
+bool     allowEmail  = false;                               // Email Notification
+input bool     allowSound  = true;                               // Enable Sound Alerts
+input string   soundBuy    = "alert.wav";                        // Sound file for Buy alerts
+input string   soundSell    = "alert.wav";                        // Sound file for Sell alerts
+input string   soundExit    = "timeout.wav";                      // Sound file for Exit alerts
 
 double buyBuff[], sellBuff[], huskyBandLowerBuff[], huskyBandUpperBuff[];
 double blockedBuyBuff[], blockedSellBuff[];
@@ -198,7 +202,7 @@ datetime prevBuy, prevSell;
 datetime prevBuy2, prevSell2;
 datetime prevBlockedBuy, prevBlockedSell;
 datetime prevBlockedBuy2, prevBlockedSell2;
-string indicatorName = "Opita 3LSH Signals";
+string indicatorName = "opita CS+HS";
 string dir = "";
 double sumWeights;
 double weights[];    // TMA weights (initialized in OnInit)
@@ -334,6 +338,26 @@ int start()
      ArrayInitialize(blockedSellBuff2, EMPTY_VALUE);
      }
 
+   // Diagnostic check for CS indicator presence on first run
+   if(counted_bars == 0 && (cs_filter_enabled || cs2_filter_enabled))
+     {
+      double t1, t2, t3, t4;
+      bool csFound = false;
+      // Check CS1 if enabled, otherwise CS2
+      int checkTf = cs_filter_enabled ? (int)cs_timeframe : (int)cs2_timeframe;
+      
+      csFound = loadCurrencyStrengthValues(checkTf, 1, t1, t2, t3, t4);
+      
+      if(!csFound)
+        {
+         string missingName = cs_indicator_name;
+         if(StringLen(cs_indicator_subfolder) > 0) missingName += " (or " + cs_indicator_subfolder + cs_indicator_name + ")";
+         string err = "CRITICAL: CS Indicator '" + missingName + "' missing/empty! Signals BLOCKED.";
+         Print(err);
+         if(allowAlerts) Alert(err);
+        }
+     }
+
    // Calculate HuskyBands first (from smLazyTMA HuskyBands)
    for(int i = processBars - 1; i >= 0; i--)
      {
@@ -388,7 +412,7 @@ int start()
                     { if(buyBuff[i+j] != EMPTY_VALUE) { recentBuy1 = true; break; } }
                   if(!recentBuy1)
                     {
-                     buyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
+                     buyBuff[i] = Low[i] - getArrowGap(i);
                      if(cs_filter_debug_logs)
                        {
                         string tsPass1 = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -402,20 +426,20 @@ int start()
                      PrintFormat("3LSH Debug: filter=CS1 side=BUY bar=%d time=%s pass=true blocked=true reason=recentSignal",
                                  i, tsRecent1);
                     }
-                  if(i == 1 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
-                    { if(prevBuy != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy (CS1) - Bullish + Lower Band Touch"); prevBuy = Time[1]; } }
+                  if(i == 1 && counted_bars > 0 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
+                    { if(prevBuy != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy (CS1)"); prevBuy = Time[1]; } }
                  }
-               else
+                 else
                  {
-                  double blockedPriceBuy1 = High[i] + getPoint() * ls_arrow_gap;
+                  double blockedPriceBuy1 = Low[i] - getArrowGap(i);
                   blockedBuyBuff[i] = blockedPriceBuy1;
                   if(cs_filter_debug_logs)
                     {
                      string tsBlock1 = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
                      PrintFormat("3LSH Debug: filter=CS1 side=BUY bar=%d time=%s pass=false blockedPrice=%.5f exit_alerts=%s allowAlerts=%s",
-                                 i, tsBlock1, blockedPriceBuy1, boolToString(exit_alerts), boolToString(allowAlerts));
+                                 i, tsBlock1, blockedPriceBuy1, boolToString(AlertOnExit), boolToString(allowAlerts));
                     }
-                  bool allowExitAlert1 = (exit_alerts && i == 1 && Time[1] != prevBlockedBuy);
+                  bool allowExitAlert1 = (AlertOnExit && i == 1 && counted_bars > 0 && Time[1] != prevBlockedBuy);
                   if(cs_filter_debug_logs)
                     {
                      string tsExit1 = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -425,7 +449,7 @@ int start()
                   if(allowExitAlert1)
                     {
                      prevBlockedBuy = Time[1];
-                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked BUY (CS1) at bar " + IntegerToString(i));
+                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit Down (CS1)");
                     }
                  }
               }
@@ -440,7 +464,7 @@ int start()
                     { if(buyBuff2[i+j2] != EMPTY_VALUE) { recentBuy2 = true; break; } }
                   if(!recentBuy2)
                     {
-                     buyBuff2[i] = Low[i] - getPoint() * ls_arrow_gap;
+                     buyBuff2[i] = Low[i] - getArrowGap(i);
                      if(cs_filter_debug_logs)
                        {
                         string tsPass2 = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -454,20 +478,20 @@ int start()
                      PrintFormat("3LSH Debug: filter=CS2 side=BUY bar=%d time=%s pass=true blocked=true reason=recentSignal",
                                  i, tsRecent2);
                     }
-                  if(i == 1 && allowAlerts && buyBuff2[i] != EMPTY_VALUE)
-                    { if(prevBuy2 != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy (CS2) - Bullish + Lower Band Touch"); prevBuy2 = Time[1]; } }
+                  if(i == 1 && counted_bars > 0 && allowAlerts && buyBuff2[i] != EMPTY_VALUE)
+                    { if(prevBuy2 != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy (CS2)"); prevBuy2 = Time[1]; } }
                  }
-               else
+                 else
                  {
-                  double blockedPriceBuy2 = High[i] + getPoint() * ls_arrow_gap;
+                  double blockedPriceBuy2 = Low[i] - getArrowGap(i);
                   blockedBuyBuff2[i] = blockedPriceBuy2;
                   if(cs_filter_debug_logs)
                     {
                      string tsBlock2 = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
                      PrintFormat("3LSH Debug: filter=CS2 side=BUY bar=%d time=%s pass=false blockedPrice=%.5f exit_alerts=%s allowAlerts=%s",
-                                 i, tsBlock2, blockedPriceBuy2, boolToString(exit_alerts), boolToString(allowAlerts));
+                                 i, tsBlock2, blockedPriceBuy2, boolToString(AlertOnExit), boolToString(allowAlerts));
                     }
-                  bool allowExitAlert2 = (exit_alerts && i == 1 && Time[1] != prevBlockedBuy2);
+                  bool allowExitAlert2 = (AlertOnExit && i == 1 && counted_bars > 0 && Time[1] != prevBlockedBuy2);
                   if(cs_filter_debug_logs)
                     {
                      string tsExit2 = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -477,7 +501,7 @@ int start()
                   if(allowExitAlert2)
                     {
                      prevBlockedBuy2 = Time[1];
-                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked BUY (CS2) at bar " + IntegerToString(i));
+                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit Down (CS2)");
                     }
                  }
               }
@@ -489,9 +513,9 @@ int start()
             for(int jb=1; jb<=ls_minBarsBetweenSignals && (i+jb)<processBars; jb++)
               { if(buyBuff[i+jb] != EMPTY_VALUE) { recentBuy = true; break; } }
             if(!recentBuy)
-              buyBuff[i] = Low[i] - getPoint() * ls_arrow_gap;
-            if(i == 1 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
-              { if(prevBuy != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy - Bullish + Lower Band Touch"); prevBuy = Time[1]; } }
+              buyBuff[i] = Low[i] - getArrowGap(i);
+            if(i == 1 && counted_bars > 0 && allowAlerts && buyBuff[i] != EMPTY_VALUE)
+              { if(prevBuy != Time[1]) { doAlert("3LSH Buy Signal", Symbol() + " " + TFName() + ": 3LSH Buy"); prevBuy = Time[1]; } }
            }
         }
 
@@ -511,7 +535,7 @@ int start()
                     { if(sellBuff[i+k] != EMPTY_VALUE) { recentSell1 = true; break; } }
                   if(!recentSell1)
                     {
-                     sellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
+                     sellBuff[i] = High[i] + getArrowGap(i);
                      if(cs_filter_debug_logs)
                        {
                         string tsPass1s = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -525,20 +549,20 @@ int start()
                      PrintFormat("3LSH Debug: filter=CS1 side=SELL bar=%d time=%s pass=true blocked=true reason=recentSignal",
                                  i, tsRecent1s);
                     }
-                  if(i == 1 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
-                    { if(prevSell != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell (CS1) - Bearish + Upper Band Touch"); prevSell = Time[1]; } }
+                  if(i == 1 && counted_bars > 0 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
+                    { if(prevSell != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell (CS1)"); prevSell = Time[1]; } }
                  }
-               else
+                 else
                  {
-                  double blockedPriceSell1 = Low[i] - getPoint() * ls_arrow_gap;
+                  double blockedPriceSell1 = High[i] + getArrowGap(i);
                   blockedSellBuff[i] = blockedPriceSell1;
                   if(cs_filter_debug_logs)
                     {
                      string tsBlock1s = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
                      PrintFormat("3LSH Debug: filter=CS1 side=SELL bar=%d time=%s pass=false blockedPrice=%.5f exit_alerts=%s allowAlerts=%s",
-                                 i, tsBlock1s, blockedPriceSell1, boolToString(exit_alerts), boolToString(allowAlerts));
+                                 i, tsBlock1s, blockedPriceSell1, boolToString(AlertOnExit), boolToString(allowAlerts));
                     }
-                  bool allowExitAlert1s = (exit_alerts && i == 1 && Time[1] != prevBlockedSell);
+                  bool allowExitAlert1s = (AlertOnExit && i == 1 && counted_bars > 0 && Time[1] != prevBlockedSell);
                   if(cs_filter_debug_logs)
                     {
                      string tsExit1s = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -548,7 +572,7 @@ int start()
                   if(allowExitAlert1s)
                     {
                      prevBlockedSell = Time[1];
-                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked SELL (CS1) at bar " + IntegerToString(i));
+                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit Up (CS1)");
                     }
                  }
               }
@@ -563,7 +587,7 @@ int start()
                     { if(sellBuff2[i+k2] != EMPTY_VALUE) { recentSell2 = true; break; } }
                   if(!recentSell2)
                     {
-                     sellBuff2[i] = High[i] + getPoint() * ls_arrow_gap;
+                     sellBuff2[i] = High[i] + getArrowGap(i);
                      if(cs_filter_debug_logs)
                        {
                         string tsPass2s = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -577,20 +601,20 @@ int start()
                      PrintFormat("3LSH Debug: filter=CS2 side=SELL bar=%d time=%s pass=true blocked=true reason=recentSignal",
                                  i, tsRecent2s);
                     }
-                  if(i == 1 && allowAlerts && sellBuff2[i] != EMPTY_VALUE)
-                    { if(prevSell2 != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell (CS2) - Bearish + Upper Band Touch"); prevSell2 = Time[1]; } }
+                  if(i == 1 && counted_bars > 0 && allowAlerts && sellBuff2[i] != EMPTY_VALUE)
+                    { if(prevSell2 != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell (CS2)"); prevSell2 = Time[1]; } }
                  }
-               else
+                 else
                  {
-                  double blockedPriceSell2 = Low[i] - getPoint() * ls_arrow_gap;
+                  double blockedPriceSell2 = High[i] + getArrowGap(i);
                   blockedSellBuff2[i] = blockedPriceSell2;
                   if(cs_filter_debug_logs)
                     {
                      string tsBlock2s = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
                      PrintFormat("3LSH Debug: filter=CS2 side=SELL bar=%d time=%s pass=false blockedPrice=%.5f exit_alerts=%s allowAlerts=%s",
-                                 i, tsBlock2s, blockedPriceSell2, boolToString(exit_alerts), boolToString(allowAlerts));
+                                 i, tsBlock2s, blockedPriceSell2, boolToString(AlertOnExit), boolToString(allowAlerts));
                     }
-                  bool allowExitAlert2s = (exit_alerts && i == 1 && Time[1] != prevBlockedSell2);
+                  bool allowExitAlert2s = (AlertOnExit && i == 1 && counted_bars > 0 && Time[1] != prevBlockedSell2);
                   if(cs_filter_debug_logs)
                     {
                      string tsExit2s = TimeToString(Time[i], TIME_DATE|TIME_SECONDS);
@@ -600,7 +624,7 @@ int start()
                   if(allowExitAlert2s)
                     {
                      prevBlockedSell2 = Time[1];
-                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit - blocked SELL (CS2) at bar " + IntegerToString(i));
+                     doAlert("3LSH Exit Alert", Symbol() + " " + TFName() + ": 3LSH Exit Up (CS2)");
                     }
                  }
               }
@@ -612,9 +636,9 @@ int start()
             for(int ks=1; ks<=ls_minBarsBetweenSignals && (i+ks)<processBars; ks++)
               { if(sellBuff[i+ks] != EMPTY_VALUE) { recentSell = true; break; } }
             if(!recentSell)
-              sellBuff[i] = High[i] + getPoint() * ls_arrow_gap;
-            if(i == 1 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
-              { if(prevSell != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell - Bearish + Upper Band Touch"); prevSell = Time[1]; } }
+              sellBuff[i] = High[i] + getArrowGap(i);
+            if(i == 1 && counted_bars > 0 && allowAlerts && sellBuff[i] != EMPTY_VALUE)
+              { if(prevSell != Time[1]) { doAlert("3LSH Sell Signal", Symbol() + " " + TFName() + ": 3LSH Sell"); prevSell = Time[1]; } }
            }
         }
      }
@@ -716,16 +740,6 @@ bool loadCurrencyStrengthValues(int tf, int shift, double &l1c, double &l1p,
      l2c = iCustom(Symbol(), tf, name, cs_line2_buffer, shift);
      l2p = iCustom(Symbol(), tf, name, cs_line2_buffer, shift + 1);
     }
-
-   // Optional swap if indicator buffers are reversed relative to base/quote
-   if(cs_swap_lines)
-     {
-      double t1 = l1c, t2 = l1p;
-      l1c = l2c; l1p = l2p;
-      l2c = t1;  l2p = t2;
-      if(cs_filter_debug_logs)
-         Print("3LSH CS note: swapped L1/L2 due to cs_swap_lines=true");
-     }
 
   // If values exist, return early
   if(!valuesMissing(l1c, l1p, l2c, l2p))
@@ -1007,9 +1021,9 @@ string TFName()
 //+------------------------------------------------------------------+
 //| Function to Show Alerts                                          |
 //+------------------------------------------------------------------+
-void doAlert(string title = "", string msg = "")
+void doAlert(string title = "", string msg = "", string soundFile = "")
   {
-   msg = indicatorName + " :: " + msg;
+   msg = indicatorName + " - " + msg;
    // Always show a single popup alert
    Alert(msg);
 
@@ -1017,9 +1031,24 @@ void doAlert(string title = "", string msg = "")
    if(allowMobile)
       SendNotification(msg);
 
-   // Play a single sound if desktop alerts are allowed
-   if(allowAlerts)
-      PlaySound("alert.wav");
+   // Play sound if enabled
+   if(allowSound)
+     {
+      // Use provided sound file, or default based on alert type
+      if(StringLen(soundFile) == 0)
+        {
+         // Default sound based on alert type using input parameters
+         if(StringFind(msg, "Buy") >= 0)
+            soundFile = soundBuy;
+         else if(StringFind(msg, "Sell") >= 0)
+            soundFile = soundSell;
+         else if(StringFind(msg, "Exit") >= 0)
+            soundFile = soundExit;
+         else
+            soundFile = soundBuy; // Default to buy sound
+        }
+      PlaySound(soundFile);
+     }
   }
 //+------------------------------------------------------------------+
 //| Function to return the distance of arrow from Candle             |
@@ -1046,5 +1075,30 @@ double getPoint()
    if(tf == 43200)
       return 900.0 * Point;
    return 20.0 * Point;
+  }
+//+------------------------------------------------------------------+
+//| Calculate arrow gap distance                                     |
+//+------------------------------------------------------------------+
+double getArrowGap(int barIndex)
+  {
+   // Calculate gap as multiplier of ATR or a reasonable base distance
+   // Use a larger base to make the gap more visible
+   double baseGap = 0.0;
+   int tf = Period();
+   
+   // Use timeframe-appropriate base gap that's visible
+   if(tf == 1)      baseGap = 50.0 * Point;   // M1: 5 pips base
+   else if(tf == 5) baseGap = 100.0 * Point;  // M5: 10 pips base
+   else if(tf == 15) baseGap = 200.0 * Point; // M15: 20 pips base
+   else if(tf == 30) baseGap = 300.0 * Point; // M30: 30 pips base
+   else if(tf == 60) baseGap = 500.0 * Point; // H1: 50 pips base
+   else if(tf == 240) baseGap = 1000.0 * Point; // H4: 100 pips base
+   else if(tf == 1440) baseGap = 2000.0 * Point; // D1: 200 pips base
+   else if(tf == 10080) baseGap = 5000.0 * Point; // W1: 500 pips base
+   else if(tf == 43200) baseGap = 10000.0 * Point; // MN1: 1000 pips base
+   else baseGap = 100.0 * Point; // Default
+   
+   // Multiply by arrow_gap parameter
+   return baseGap * arrow_gap;
   }
 //+------------------------------------------------------------------+
